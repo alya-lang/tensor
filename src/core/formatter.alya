@@ -1,0 +1,52 @@
+## tensor Core Formatting Engine
+##
+## Part of the Alya Language package ecosystem (https://github.com/alya-lang).
+## Contains formatting routines, salutation builders, and pattern matchers.
+
+import "../types.alya"
+
+# Internal helper using when pattern matching (private to module, not exported with pub)
+function build_salutation(prefix: string, style: int) -> string
+    return when style
+        is TensorStyle.Formal => "Greetings and {prefix}"
+        is TensorStyle.Casual => "Hey"
+        else                    => prefix
+    end
+end
+
+## Formats a standard greeting message for the specified recipient name.
+##
+## ### Parameters
+## - `name`: The recipient name string.
+##
+## ### Returns
+## The formatted greeting string `"Hello, {name}!"`.
+##
+## ### Examples
+## ```alya
+## let msg = core_format_greeting("Alya") # "Hello, Alya!"
+## ```
+pub function core_format_greeting(name: string) -> string
+    return "Hello, {name}!"
+end
+
+## Formats a personalized greeting message using configuration fields and style patterns.
+##
+## Evaluates the configuration's `style` enum variant via `when` pattern matching
+## to determine the appropriate salutation prefix.
+##
+## ### Parameters
+## - `config`: The `TensorConfig` instance providing name, prefix, and style.
+##
+## ### Returns
+## The formatted greeting string `"{salutation}, {name}!"`.
+##
+## ### Examples
+## ```alya
+## let cfg = new_config("Alice", 1, TensorStyle.Formal)
+## let msg = core_format_custom(cfg) # "Greetings and Hello, Alice!"
+## ```
+pub function core_format_custom(config: TensorConfig) -> string
+    let salutation = build_salutation(config.prefix, config.style)
+    return "{salutation}, {config.name}!"
+end

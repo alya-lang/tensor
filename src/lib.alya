@@ -1,0 +1,57 @@
+## tensor Library Facade
+##
+## Part of the Alya Language package ecosystem (https://github.com/alya-lang).
+## Provides top-level greeting functions and configuration constructors.
+
+import "./types.alya"
+import "./core/formatter.alya"
+
+# Internal sanitize helper (private to facade, not exported with pub)
+function internal_clean_name(name: string) -> string
+    return when
+        name is null => "World"
+        name == ""   => "World"
+        else         => name
+    end
+end
+
+## Formats and returns a greeting message for the specified recipient.
+##
+## Defaults to `"World"` if the name parameter is omitted, empty, or null.
+##
+## ### Parameters
+## - `name`: The name of the recipient to greet. Defaults to `"World"`.
+##
+## ### Returns
+## A formatted greeting string, e.g. `"Hello, World!"`.
+##
+## ### Examples
+## ```alya
+## let msg = hello("Alya")
+## say msg # "Hello, Alya!"
+## ```
+pub function hello(name: string = "World") -> string
+    let clean = internal_clean_name(name)
+    return core_format_greeting(clean)
+end
+
+## Constructs a new configuration model instance with specified or default values.
+##
+## Automatically validates and sanitizes the input name using `internal_clean_name`.
+##
+## ### Parameters
+## - `name`: Target recipient name. Defaults to `"World"`.
+## - `count`: Number of iterations or repetition limit. Defaults to `1`.
+## - `style`: Greeting style variant code (`TensorStyle`). Defaults to `TensorStyle.Standard`.
+##
+## ### Returns
+## A newly initialized `TensorConfig` instance.
+##
+## ### Examples
+## ```alya
+## let cfg = new_config("Community", 5, TensorStyle.Formal)
+## ```
+pub function new_config(name: string = "World", count: int = 1, style: int = TensorStyle.Standard) -> TensorConfig
+    let clean = internal_clean_name(name)
+    return make_config(clean, count, style)
+end

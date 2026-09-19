@@ -1,0 +1,19 @@
+[package]
+name = "tensor"
+version = "0.1.0"
+alya-version = "0.0.18"
+entry = "src/lib.alya"
+description = "Multi-dimensional tensor engine with SIMD vector acceleration"
+authors = ["Alya Language Contributors <https://github.com/alya-lang>"]
+license = "MIT"
+homepage = "https://github.com/alya-lang/alya"
+repository = "https://github.com/alya-lang/tensor"
+keywords = ["alya", "alya-lang", "package", "tensor", ""tensor","simd","matrix","math","numeric""]
+
+[dependencies]
+
+# [build]
+# c-sources = ["c/source.c"]
+# c-flags = ["-O2"]
+# c-include-dirs = ["c"]
+# links = "tensor"

@@ -1,0 +1,72 @@
+## Test suite for tensor
+## Part of the Alya Language package ecosystem (https://github.com/alya-lang)
+
+import "std/test"
+import "../src/lib.alya" as pkg
+
+function main()
+    test_suite("tensor Test Suite")
+    let r = runner_new()
+
+    # 1. Basic facade function
+    let res = pkg::hello("Alya")
+    runner_assert_str_eq(r, res, "Hello, Alya!", "pkg::hello returns formatted greeting")
+
+    # 2. Default parameter
+    let default_res = pkg::hello()
+    runner_assert_str_eq(r, default_res, "Hello, World!", "pkg::hello() uses default name")
+
+    # 3. Handling null parameter with is null
+    let null_res = pkg::hello(null)
+    runner_assert_str_eq(r, null_res, "Hello, World!", "pkg::hello(null) defaults via is null check")
+
+    # 4. Handling empty string with when matcher
+    let empty_res = pkg::hello("")
+    runner_assert_str_eq(r, empty_res, "Hello, World!", "pkg::hello(\"\") defaults via when check")
+
+    # 5. Modular types & config constructor
+    let cfg = pkg::new_config("Community", 3)
+    runner_assert_str_eq(r, cfg.name, "Community", "pkg::new_config sets name correctly")
+    runner_assert_str_eq(r, cfg.prefix, "Hello", "pkg::new_config sets default prefix")
+    runner_assert_eq(r, cfg.count, 3, "pkg::new_config sets count correctly")
+
+    # 6. Struct method on instance
+    let summary_res = cfg.summary()
+    runner_assert_str_eq(r, summary_res, "Hello Community (count: 3)", "cfg.summary() struct method works")
+
+    # 7. Immutable with_name method
+    let updated_cfg = cfg.with_name("Contributors")
+    runner_assert_str_eq(r, updated_cfg.name, "Contributors", "cfg.with_name updates name")
+    runner_assert_str_eq(r, updated_cfg.summary(), "Hello Contributors (count: 3)", "updated_cfg summary is correct")
+
+    # 8. Core custom formatter using struct
+    let custom_res = pkg::core_format_custom(cfg)
+    runner_assert_str_eq(r, custom_res, "Hello, Community!", "pkg::core_format_custom formats using config")
+
+    # 9. Pattern matching via when with Formal enum variant
+    let cfg_formal = pkg::new_config("Alice", 1, pkg::TensorStyle.Formal)
+    let formal_res = pkg::core_format_custom(cfg_formal)
+    runner_assert_str_eq(r, formal_res, "Greetings and Hello, Alice!", "when pattern matches Formal style")
+
+    # 10. Pattern matching via when with Casual enum variant
+    let cfg_casual = pkg::new_config("Bob", 1, pkg::TensorStyle.Casual)
+    let casual_res = pkg::core_format_custom(cfg_casual)
+    runner_assert_str_eq(r, casual_res, "Hey, Bob!", "when pattern matches Casual style")
+
+    # 11. Destructuring: tuples and maps
+    let (t_prefix, t_count) = ("Custom", 42)
+    runner_assert_str_eq(r, t_prefix, "Custom", "tuple destructuring binds string")
+    runner_assert_eq(r, t_count, 42, "tuple destructuring binds integer")
+
+    let pkg_info = { "name": "tensor", "version": "0.1.0" }
+    let { name: info_name, version: info_ver } = pkg_info
+    runner_assert_str_eq(r, info_name, "tensor", "map destructuring extracts key")
+    runner_assert_str_eq(r, info_ver, "0.1.0", "map destructuring extracts version")
+
+    let failed = runner_summary(r)
+    if failed > 0
+        exit(1)
+    end
+end
+
+main()

@@ -1,0 +1,106 @@
+## tensor Types & Data Structures
+##
+## Part of the Alya Language package ecosystem (https://github.com/alya-lang).
+## Defines configuration models, style enumerations, and associated methods.
+
+## Public enumeration of greeting formality styles.
+##
+## Determines the salutation prefix used when formatting custom greetings:
+## - `Standard`: Classic friendly greeting (e.g. `"Hello"`).
+## - `Formal`: Elevated professional salutation (e.g. `"Greetings and Hello"`).
+## - `Casual`: Relaxed informal greeting (e.g. `"Hey"`).
+pub enum TensorStyle
+    Standard,
+    Formal,
+    Casual
+end
+
+## Configuration data model holding parameters for greeting generation.
+##
+## Encapsulates the target name, greeting prefix, repeat count, and stylistic variant.
+##
+## ### Fields
+## - `name`: The validated recipient name.
+## - `prefix`: Salutation prefix (defaults to `"Hello"`).
+## - `count`: Greeting count or repetition limit.
+## - `style`: Greeting style enum code (`TensorStyle`).
+pub struct TensorConfig
+    name: string,
+    prefix: string,
+    count: int,
+    style: int
+end
+
+## Returns a human-readable formatted summary string of this configuration.
+##
+## ### Parameters
+## - `self`: The target `TensorConfig` instance.
+##
+## ### Returns
+## Formatted summary string in the form `"{prefix} {name} (count: {count})"`.
+##
+## ### Examples
+## ```alya
+## let cfg = new_config("Community", 3)
+## say cfg.summary() # "Hello Community (count: 3)"
+## ```
+pub function TensorConfig.summary(self: TensorConfig) -> string
+    return "{self.prefix} {self.name} (count: {self.count})"
+end
+
+## Returns an updated immutable copy of the configuration with a new validated name.
+##
+## ### Parameters
+## - `self`: The current `TensorConfig` instance.
+## - `new_name`: The replacement name to apply.
+##
+## ### Returns
+## A new `TensorConfig` instance with updated name and identical prefix, count, and style.
+##
+## ### Examples
+## ```alya
+## let updated = cfg.with_name("Contributors")
+## ```
+pub function TensorConfig.with_name(self: TensorConfig, new_name: string) -> TensorConfig
+    return TensorConfig {
+        name: validate_name(new_name),
+        prefix: self.prefix,
+        count: self.count,
+        style: self.style
+    }
+end
+
+# Internal validation helper (private to module, not exported with pub)
+function validate_name(name: string) -> string
+    return when
+        name is null => "World"
+        name == ""   => "World"
+        else         => name
+    end
+end
+
+## Factory constructor creating a validated `TensorConfig` instance.
+##
+## Sanitizes the input name using `validate_name` and assigns the default `"Hello"` prefix.
+##
+## ### Parameters
+## - `name`: Recipient name string. Defaults to `"World"`.
+## - `count`: Repetition count. Defaults to `1`.
+## - `style`: Formality style variant from `TensorStyle`. Defaults to `TensorStyle.Standard`.
+##
+## ### Returns
+## A newly initialized `TensorConfig` instance.
+##
+## ### Examples
+## ```alya
+## let cfg = make_config("World", 1, TensorStyle.Standard)
+## ```
+pub function make_config(name: string = "World", count: int = 1, style: int = TensorStyle.Standard) -> TensorConfig
+    let valid_name = validate_name(name)
+    return TensorConfig {
+        name: valid_name,
+        prefix: "Hello",
+        count: count,
+        style: style
+    }
+end
