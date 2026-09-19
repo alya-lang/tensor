@@ -8,7 +8,7 @@ authors = ["Alya Language Contributors <https://github.com/alya-lang>"]
 license = "MIT"
 homepage = "https://github.com/alya-lang/alya"
 repository = "https://github.com/alya-lang/tensor"
-keywords = ["alya", "alya-lang", "package", "tensor", ""tensor","simd","matrix","math","numeric""]
+keywords = ["alya", "alya-lang", "package", "tensor", "simd", "matrix", "math", "numeric"]
 
 [dependencies]
 

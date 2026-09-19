@@ -1,33 +1,19 @@
-## Example usage and walkthrough for tensor
-## Part of the Alya Language package ecosystem (https://github.com/alya-lang)
+# Demo for alya-lang/tensor
 
-import "../src/lib.alya" as pkg
+import "../src/lib.alya"
 
-function main()
-    # 1. Basic greeting with default parameter
-    let msg1 = pkg::hello()
-    say f"Default greeting: {msg1}"
+let t = Tensor.from_array([2, 2], [1.0, 2.0, 3.0, 4.0])
+say "Tensor 2x2 created:"
+say t.get_2d(0, 0)
+say t.get_2d(0, 1)
+say t.get_2d(1, 0)
+say t.get_2d(1, 1)
 
-    # 2. Greeting with custom name
-    let msg2 = pkg::hello("Alya Developer")
-    say f"Custom greeting:  {msg2}"
+let t2 = t.matmul(t)
+say "Squared via matmul:"
+say t2.get_2d(0, 0)
+say t2.get_2d(1, 1)
 
-    # 3. Struct config with enum style, and struct method
-    let cfg_standard = pkg::new_config("Community", 5)
-    say f"Standard summary: {cfg_standard.summary()}"
-    say f"Standard format:  {pkg::core_format_custom(cfg_standard)}"
-
-    # 4. Immutable update with with_name
-    let cfg_updated = cfg_standard.with_name("Core Team")
-    say f"Updated summary:  {cfg_updated.summary()}"
-
-    # 5. Formal style using pub enum
-    let cfg_formal = pkg::new_config("Distinguished Guest", 1, pkg::TensorStyle.Formal)
-    say f"Formal format:    {pkg::core_format_custom(cfg_formal)}"
-
-    # 6. Casual style using pub enum
-    let cfg_casual = pkg::new_config("Friend", 1, pkg::TensorStyle.Casual)
-    say f"Casual format:    {pkg::core_format_custom(cfg_casual)}"
-end
-
-main()
+t.free()
+t2.free()
+say "Done!"

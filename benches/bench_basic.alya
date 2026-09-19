@@ -1,30 +1,14 @@
-## Benchmark suite for tensor
-## Part of the Alya Language package ecosystem (https://github.com/alya-lang)
+# Benchmark for alya-lang/tensor
 
-import "std/test"
-import "../src/lib.alya" as pkg
+import "../src/lib.alya"
 
-function main()
-    let runner = bench_runner("tensor Micro-Benchmarks")
+let A = Tensor.ones([64, 64])
+let B = Tensor.ones([64, 64])
 
-    bench_start(runner, 100000)
-    let i = 0
-    while i < 100000
-        pkg::hello("Alya")
-        i += 1
-    end
-    bench_stop(runner, "hello() 100k calls")
-
-    bench_start(runner, 50000)
-    let j = 0
-    while j < 50000
-        let cfg = pkg::new_config("Bench", 1, pkg::TensorStyle.Formal)
-        pkg::core_format_custom(cfg)
-        j += 1
-    end
-    bench_stop(runner, "new_config() + format_custom() 50k calls")
-
-    bench_summary(runner)
+bench "GEMM Matrix Multiplication (64x64)"
+    let C = A.matmul(B)
+    C.free()
 end
 
-main()
+A.free()
+B.free()

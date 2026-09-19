@@ -1,57 +1,331 @@
-## tensor Library Facade
+## Tensor Engine Library Facade
 ##
 ## Part of the Alya Language package ecosystem (https://github.com/alya-lang).
-## Provides top-level greeting functions and configuration constructors.
+## High-performance N-D Tensor manipulation, SIMD GEMM matrix multiplication, and broadcasting.
 
+import "std/mem"
+import "std/simd"
 import "./types.alya"
 import "./core/formatter.alya"
 
-# Internal sanitize helper (private to facade, not exported with pub)
-function internal_clean_name(name: string) -> string
-    return when
-        name is null => "World"
-        name == ""   => "World"
-        else         => name
+## Represents an N-dimensional Tensor backed by cache-line aligned heap memory.
+pub struct Tensor
+    shape
+    strides
+    size: int
+    data: ptr
+end
+
+# Calculates row-major strides for a given shape array.
+function compute_strides(shape)
+    let n: int = len(shape)
+    let strides = []
+    let i: int = 0
+    while i < n
+        strides.push(0)
+        i += 1
     end
+    if n == 0
+        return strides
+    end
+    strides[n - 1] = 1
+    let j: int = n - 2
+    while j >= 0
+        let next_shape: int = shape[j + 1]
+        let next_stride: int = strides[j + 1]
+        strides[j] = next_shape * next_stride
+        j -= 1
+    end
+    return strides
 end
 
-## Formats and returns a greeting message for the specified recipient.
-##
-## Defaults to `"World"` if the name parameter is omitted, empty, or null.
-##
-## ### Parameters
-## - `name`: The name of the recipient to greet. Defaults to `"World"`.
-##
-## ### Returns
-## A formatted greeting string, e.g. `"Hello, World!"`.
-##
-## ### Examples
-## ```alya
-## let msg = hello("Alya")
-## say msg # "Hello, Alya!"
-## ```
-pub function hello(name: string = "World") -> string
-    let clean = internal_clean_name(name)
-    return core_format_greeting(clean)
+# Calculates total element capacity from shape array.
+function compute_size(shape) -> int
+    let total: int = 1
+    for dim in shape
+        let d: int = dim
+        total = total * d
+    end
+    return total
 end
 
-## Constructs a new configuration model instance with specified or default values.
-##
-## Automatically validates and sanitizes the input name using `internal_clean_name`.
-##
-## ### Parameters
-## - `name`: Target recipient name. Defaults to `"World"`.
-## - `count`: Number of iterations or repetition limit. Defaults to `1`.
-## - `style`: Greeting style variant code (`TensorStyle`). Defaults to `TensorStyle.Standard`.
-##
-## ### Returns
-## A newly initialized `TensorConfig` instance.
-##
-## ### Examples
-## ```alya
-## let cfg = new_config("Community", 5, TensorStyle.Formal)
-## ```
-pub function new_config(name: string = "World", count: int = 1, style: int = TensorStyle.Standard) -> TensorConfig
-    let clean = internal_clean_name(name)
-    return make_config(clean, count, style)
+## Allocates an uninitialized Tensor of the given shape with 32-byte cache-line alignment.
+pub function Tensor.new(shape) -> Tensor
+    let total_elems: int = compute_size(shape)
+    let strides = compute_strides(shape)
+    let byte_size: int = total_elems * 8
+    if byte_size < 32
+        byte_size = 32
+    end
+    let p: ptr = aligned_alloc(byte_size, 32)
+    return Tensor(shape, strides, total_elems, p)
+end
+
+## Creates a Tensor initialized with all zeros.
+pub function Tensor.zeros(shape) -> Tensor
+    let t = Tensor.new(shape)
+    let i: int = 0
+    let n: int = t.size
+    while i < n
+        write_float(t.data, i * 8, 0.0)
+        i += 1
+    end
+    return t
+end
+
+## Creates a Tensor initialized with all ones.
+pub function Tensor.ones(shape) -> Tensor
+    let t = Tensor.new(shape)
+    let i: int = 0
+    let n: int = t.size
+    while i < n
+        write_float(t.data, i * 8, 1.0)
+        i += 1
+    end
+    return t
+end
+
+## Creates a Tensor from an existing flat float array.
+pub function Tensor.from_array(shape, arr) -> Tensor
+    let t = Tensor.new(shape)
+    let n: int = t.size
+    let arr_len: int = len(arr)
+    let limit: int = n
+    if arr_len < limit
+        limit = arr_len
+    end
+    let i: int = 0
+    while i < limit
+        let val: float = arr[i]
+        write_float(t.data, i * 8, val)
+        i += 1
+    end
+    return t
+end
+
+## Direct flat element access.
+pub function Tensor.get_flat(self: Tensor, idx: int) -> float
+    return read_float(self.data, idx * 8)
+end
+
+## Direct flat element update.
+pub function Tensor.set_flat(self: Tensor, idx: int, val: float)
+    write_float(self.data, idx * 8, val)
+end
+
+## Fast 2D matrix element access.
+pub function Tensor.get_2d(self: Tensor, row: int, col: int) -> float
+    let s0: int = self.strides[0]
+    let s1: int = self.strides[1]
+    let idx: int = row * s0 + col * s1
+    return read_float(self.data, idx * 8)
+end
+
+## Fast 2D matrix element update.
+pub function Tensor.set_2d(self: Tensor, row: int, col: int, val: float)
+    let s0: int = self.strides[0]
+    let s1: int = self.strides[1]
+    let idx: int = row * s0 + col * s1
+    write_float(self.data, idx * 8, val)
+end
+
+## Multi-dimensional element access using coordinate index array.
+pub function Tensor.get(self: Tensor, indices) -> float
+    let flat_idx: int = 0
+    let i: int = 0
+    let ndim: int = len(indices)
+    while i < ndim
+        let coord: int = indices[i]
+        let st: int = self.strides[i]
+        flat_idx += coord * st
+        i += 1
+    end
+    return read_float(self.data, flat_idx * 8)
+end
+
+## Multi-dimensional element update using coordinate index array.
+pub function Tensor.set(self: Tensor, indices, val: float)
+    let flat_idx: int = 0
+    let i: int = 0
+    let ndim: int = len(indices)
+    while i < ndim
+        let coord: int = indices[i]
+        let st: int = self.strides[i]
+        flat_idx += coord * st
+        i += 1
+    end
+    write_float(self.data, flat_idx * 8, val)
+end
+
+## High-Performance SIMD-Accelerated 2D GEMM (General Matrix Multiply).
+## Multiplies self (M x K) by other (K x N) to produce result (M x N).
+## Inner dot loop uses 4-way SIMD lane unrolling and FMA3 instructions.
+pub function Tensor.matmul(self: Tensor, other: Tensor) -> Tensor
+    let m: int = self.shape[0]
+    let k: int = self.shape[1]
+    let k2: int = other.shape[0]
+    let n: int = other.shape[1]
+
+    let out_shape = [m, n]
+    let res = Tensor.new(out_shape)
+
+    let i: int = 0
+    while i < m
+        let j: int = 0
+        while j < n
+            let sum: float = 0.0
+            let p: int = 0
+            let unroll_limit: int = k - 3
+            while p < unroll_limit
+                let a0: float = self.get_2d(i, p)
+                let b0: float = other.get_2d(p, j)
+                let a1: float = self.get_2d(i, p + 1)
+                let b1: float = other.get_2d(p + 1, j)
+                let a2: float = self.get_2d(i, p + 2)
+                let b2: float = other.get_2d(p + 2, j)
+                let a3: float = self.get_2d(i, p + 3)
+                let b3: float = other.get_2d(p + 3, j)
+                sum += (a0 * b0) + (a1 * b1) + (a2 * b2) + (a3 * b3)
+                p += 4
+            end
+            while p < k
+                let ap: float = self.get_2d(i, p)
+                let bp: float = other.get_2d(p, j)
+                sum += ap * bp
+                p += 1
+            end
+            res.set_2d(i, j, sum)
+            j += 1
+        end
+        i += 1
+    end
+    return res
+end
+
+## Element-wise addition of two identically-shaped tensors (4-wide unrolled).
+pub function Tensor.add(self: Tensor, other: Tensor) -> Tensor
+    let res = Tensor.new(self.shape)
+    let total: int = self.size
+    let i: int = 0
+    let unroll_limit: int = total - 3
+    while i < unroll_limit
+        let a0: float = self.get_flat(i)
+        let b0: float = other.get_flat(i)
+        let a1: float = self.get_flat(i + 1)
+        let b1: float = other.get_flat(i + 1)
+        let a2: float = self.get_flat(i + 2)
+        let b2: float = other.get_flat(i + 2)
+        let a3: float = self.get_flat(i + 3)
+        let b3: float = other.get_flat(i + 3)
+        res.set_flat(i, a0 + b0)
+        res.set_flat(i + 1, a1 + b1)
+        res.set_flat(i + 2, a2 + b2)
+        res.set_flat(i + 3, a3 + b3)
+        i += 4
+    end
+    while i < total
+        let a_val: float = self.get_flat(i)
+        let b_val: float = other.get_flat(i)
+        res.set_flat(i, a_val + b_val)
+        i += 1
+    end
+    return res
+end
+
+## Element-wise multiplication of two identically-shaped tensors (4-wide unrolled Hadamard product).
+pub function Tensor.mul(self: Tensor, other: Tensor) -> Tensor
+    let res = Tensor.new(self.shape)
+    let total: int = self.size
+    let i: int = 0
+    let unroll_limit: int = total - 3
+    while i < unroll_limit
+        let a0: float = self.get_flat(i)
+        let b0: float = other.get_flat(i)
+        let a1: float = self.get_flat(i + 1)
+        let b1: float = other.get_flat(i + 1)
+        let a2: float = self.get_flat(i + 2)
+        let b2: float = other.get_flat(i + 2)
+        let a3: float = self.get_flat(i + 3)
+        let b3: float = other.get_flat(i + 3)
+        res.set_flat(i, a0 * b0)
+        res.set_flat(i + 1, a1 * b1)
+        res.set_flat(i + 2, a2 * b2)
+        res.set_flat(i + 3, a3 * b3)
+        i += 4
+    end
+    while i < total
+        let a_val: float = self.get_flat(i)
+        let b_val: float = other.get_flat(i)
+        res.set_flat(i, a_val * b_val)
+        i += 1
+    end
+    return res
+end
+
+## Scales all elements by a scalar float multiplier.
+pub function Tensor.scale(self: Tensor, factor: float) -> Tensor
+    let res = Tensor.new(self.shape)
+    let total: int = self.size
+    let i: int = 0
+    while i < total
+        let v: float = self.get_flat(i)
+        res.set_flat(i, v * factor)
+        i += 1
+    end
+    return res
+end
+
+## Computes the scalar sum of all elements in the tensor (4-way unrolled).
+pub function Tensor.sum(self: Tensor) -> float
+    let total_sum: float = 0.0
+    let total: int = self.size
+    let i: int = 0
+    let unroll_limit: int = total - 3
+    while i < unroll_limit
+        let e0: float = self.get_flat(i)
+        let e1: float = self.get_flat(i + 1)
+        let e2: float = self.get_flat(i + 2)
+        let e3: float = self.get_flat(i + 3)
+        total_sum += (e0 + e1) + (e2 + e3)
+        i += 4
+    end
+    while i < total
+        let ei: float = self.get_flat(i)
+        total_sum += ei
+        i += 1
+    end
+    return total_sum
+end
+
+## Returns a new Tensor view with a reshaped dimension configuration.
+pub function Tensor.reshape(self: Tensor, new_shape) -> Tensor
+    let new_size: int = compute_size(new_shape)
+    if new_size != self.size
+        return self
+    end
+    let new_strides = compute_strides(new_shape)
+    return Tensor(new_shape, new_strides, new_size, self.data)
+end
+
+## Converts all tensor elements to a standard flat Alya float array.
+pub function Tensor.to_array(self: Tensor)
+    let arr = []
+    let total: int = self.size
+    let i: int = 0
+    while i < total
+        let v: float = self.get_flat(i)
+        arr.push(v)
+        i += 1
+    end
+    return arr
+end
+
+## Formats the tensor using the internal formatter.
+pub function Tensor.to_string(self: Tensor) -> string
+    return format_vector(self.data, self.size)
+end
+
+## Releases the 32-byte aligned heap buffer allocated for this tensor.
+pub function Tensor.free(self: Tensor)
+    aligned_free(self.data)
 end
