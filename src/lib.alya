@@ -61,6 +61,11 @@ pub function Tensor.new(shape) -> Tensor
     return Tensor(shape, strides, total_elems, p)
 end
 
+## Returns default execution configuration for the tensor engine.
+pub function Tensor.default_config() -> TensorConfig
+    return new_config(TensorDevice.SIMD, 0, 1)
+end
+
 ## Creates a Tensor initialized with all zeros.
 pub function Tensor.zeros(shape) -> Tensor
     let t = Tensor.new(shape)
@@ -165,6 +170,9 @@ pub function Tensor.matmul(self: Tensor, other: Tensor) -> Tensor
     let k: int = self.shape[1]
     let k2: int = other.shape[0]
     let n: int = other.shape[1]
+    if k != k2
+        throw "Incompatible tensor dimensions for matrix multiplication"
+    end
 
     let out_shape = [m, n]
     let res = Tensor.new(out_shape)
