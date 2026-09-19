@@ -232,6 +232,36 @@ pub function Tensor.add(self: Tensor, other: Tensor) -> Tensor
     return res
 end
 
+## Element-wise subtraction of two identically-shaped tensors (4-wide unrolled).
+pub function Tensor.sub(self: Tensor, other: Tensor) -> Tensor
+    let res = Tensor.new(self.shape)
+    let total: int = self.size
+    let i: int = 0
+    let unroll_limit: int = total - 3
+    while i < unroll_limit
+        let a0: float = self.get_flat(i)
+        let b0: float = other.get_flat(i)
+        let a1: float = self.get_flat(i + 1)
+        let b1: float = other.get_flat(i + 1)
+        let a2: float = self.get_flat(i + 2)
+        let b2: float = other.get_flat(i + 2)
+        let a3: float = self.get_flat(i + 3)
+        let b3: float = other.get_flat(i + 3)
+        res.set_flat(i, a0 - b0)
+        res.set_flat(i + 1, a1 - b1)
+        res.set_flat(i + 2, a2 - b2)
+        res.set_flat(i + 3, a3 - b3)
+        i += 4
+    end
+    while i < total
+        let a_val: float = self.get_flat(i)
+        let b_val: float = other.get_flat(i)
+        res.set_flat(i, a_val - b_val)
+        i += 1
+    end
+    return res
+end
+
 ## Element-wise multiplication of two identically-shaped tensors (4-wide unrolled Hadamard product).
 pub function Tensor.mul(self: Tensor, other: Tensor) -> Tensor
     let res = Tensor.new(self.shape)

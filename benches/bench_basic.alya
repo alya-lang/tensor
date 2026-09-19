@@ -1,14 +1,91 @@
-# Benchmark for alya-lang/tensor
+## Benchmark suite for tensor package
+## Part of the Alya Language package ecosystem (https://github.com/alya-lang)
 
-import "../src/lib.alya"
+import "std/test"
+import "../src/lib.alya" as tensor
 
-let A = Tensor.ones([64, 64])
-let B = Tensor.ones([64, 64])
+function main()
+    let runner = bench_runner("tensor Micro-Benchmarks")
 
-bench "GEMM Matrix Multiplication (64x64)"
-    let C = A.matmul(B)
-    C.free()
+    # 1. Allocation & Deallocation
+    let n_alloc = 2000
+    bench_start(runner, n_alloc)
+    let i = 0
+    while i < n_alloc
+        let t = tensor::Tensor.zeros([32, 32])
+        t.free()
+        i += 1
+    end
+    bench_stop(runner, "Tensor.zeros([32, 32]) + free")
+
+    # Setup persistent tensors for compute benchmarks
+    let t1 = tensor::Tensor.ones([32, 32])
+    let t2 = tensor::Tensor.ones([32, 32])
+
+    # 2. Element-wise Scale
+    let n_scale = 5000
+    bench_start(runner, n_scale)
+    let s_idx = 0
+    while s_idx < n_scale
+        let res = t1.scale(2.5)
+        res.free()
+        s_idx += 1
+    end
+    bench_stop(runner, "Tensor.scale([32, 32])")
+
+    # 3. Element-wise Addition
+    let n_add = 5000
+    bench_start(runner, n_add)
+    let a_idx = 0
+    while a_idx < n_add
+        let res = t1.add(t2)
+        res.free()
+        a_idx += 1
+    end
+    bench_stop(runner, "Tensor.add([32, 32])")
+
+    # 4. Horizontal Sum Reduction
+    let n_sum = 10000
+    bench_start(runner, n_sum)
+    let sm_idx = 0
+    let accum = 0.0
+    while sm_idx < n_sum
+        accum += t1.sum()
+        sm_idx += 1
+    end
+    bench_stop(runner, "Tensor.sum([32, 32])")
+
+    # 5. SIMD GEMM Matmul 32x32
+    let n_mm32 = 500
+    bench_start(runner, n_mm32)
+    let m32_idx = 0
+    while m32_idx < n_mm32
+        let res = t1.matmul(t2)
+        res.free()
+        m32_idx += 1
+    end
+    bench_stop(runner, "Tensor.matmul([32, 32])")
+
+    t1.free()
+    t2.free()
+
+    # 6. SIMD GEMM Matmul 64x64
+    let m1_64 = tensor::Tensor.ones([64, 64])
+    let m2_64 = tensor::Tensor.ones([64, 64])
+    let n_mm64 = 100
+    bench_start(runner, n_mm64)
+    let m64_idx = 0
+    while m64_idx < n_mm64
+        let res = m1_64.matmul(m2_64)
+        res.free()
+        m64_idx += 1
+    end
+    bench_stop(runner, "Tensor.matmul([64, 64])")
+
+    m1_64.free()
+    m2_64.free()
+
+    bench_summary(runner)
 end
 
-A.free()
-B.free()
+main()
