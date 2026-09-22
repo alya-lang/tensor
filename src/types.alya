@@ -5,19 +5,24 @@
 
 ## Public enumeration of supported tensor numeric scalar data types.
 pub enum TensorDtype
-    Float64,
-    Float32,
-    Int32,
-    Int64
+    Float64 = 0,
+    Float32 = 1,
+    Int32 = 2,
+    Int64 = 3
 end
 
 ## Public enumeration of execution engine devices.
 pub enum TensorDevice
-    CPU,
-    SIMD
+    CPU = 0,
+    SIMD = 1
 end
 
 ## Configuration data model holding execution parameters for the tensor engine.
+##
+## ### Fields
+## - `device`: Active `TensorDevice` value (`0` for CPU, `1` for SIMD).
+## - `precision`: Active `TensorDtype` value (`0` for Float64).
+## - `threads`: Worker thread count.
 pub struct TensorConfig
     device: int,
     precision: int,
@@ -25,15 +30,34 @@ pub struct TensorConfig
 end
 
 ## Creates a new TensorConfig with default hardware settings.
+##
+## ### Parameters
+## - `device`: Active `TensorDevice` value. Defaults to `1` (SIMD).
+## - `precision`: Active `TensorDtype` value. Defaults to `0` (Float64).
+## - `threads`: Worker thread count. Defaults to `1`.
+##
+## ### Returns
+## A newly initialized `TensorConfig` instance.
+##
+## ### Examples
+## ```alya
+## let cfg = new_config(TensorDevice.SIMD, 0, 4)
+## ```
 pub function new_config(device: int = 1, precision: int = 0, threads: int = 1) -> TensorConfig
-    return TensorConfig(device, precision, threads)
+    return TensorConfig { device: device, precision: precision, threads: threads }
 end
 
 ## Returns a summary description of the tensor configuration.
+##
+## ### Parameters
+## - `self`: The target `TensorConfig` instance.
+##
+## ### Returns
+## Human-readable summary string naming the device and thread count.
 pub function TensorConfig.summary(self: TensorConfig) -> string
-    let dev_name = "CPU"
-    if self.device == 1
-        dev_name = "SIMD (AVX2/Neon/SSE2)"
+    let dev_name = when self.device
+        is 1 => "SIMD (AVX2/Neon/SSE2)"
+        else => "CPU"
     end
-    return "TensorConfig(device: " + dev_name + ", threads: " + str(self.threads) + ")"
+    return "TensorConfig(device: {dev_name}, threads: {self.threads})"
 end

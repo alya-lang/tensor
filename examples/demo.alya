@@ -1,4 +1,5 @@
-# Demo for alya-lang/tensor
+## Demo of the tensor package
+## Part of the Alya Language package ecosystem (https://github.com/alya-lang)
 
 import "../src/lib.alya"
 

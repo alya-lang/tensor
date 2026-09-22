@@ -9,15 +9,32 @@ import "./types.alya"
 import "./core/formatter.alya"
 
 ## Represents an N-dimensional Tensor backed by cache-line aligned heap memory.
+##
+## ### Fields
+## - `shape`: Dimension size array (e.g. `[2, 3]`).
+## - `strides`: Row-major stride array matching `shape`.
+## - `size`: Total element count.
+## - `data`: 32-byte aligned heap buffer pointer.
 pub struct Tensor
-    shape
-    strides
+    shape: array
+    strides: array
     size: int
     data: ptr
 end
 
-# Calculates row-major strides for a given shape array.
-function compute_strides(shape)
+## Calculates row-major strides for a given shape array.
+##
+## ### Parameters
+## - `shape`: Dimension size array.
+##
+## ### Returns
+## Stride array where each entry counts elements skipped per step.
+##
+## ### Examples
+## ```alya
+## say compute_strides([2, 3]) # [3, 1]
+## ```
+pub function compute_strides(shape: array) -> array
     let n: int = len(shape)
     let strides = []
     let i: int = 0
@@ -39,8 +56,14 @@ function compute_strides(shape)
     return strides
 end
 
-# Calculates total element capacity from shape array.
-function compute_size(shape) -> int
+## Calculates total element capacity from a shape array.
+##
+## ### Parameters
+## - `shape`: Dimension size array.
+##
+## ### Returns
+## Total element count integer.
+pub function compute_size(shape: array) -> int
     let total: int = 1
     for dim in shape
         let d: int = dim
@@ -58,7 +81,7 @@ pub function Tensor.new(shape) -> Tensor
         byte_size = 32
     end
     let p: ptr = aligned_alloc(byte_size, 32)
-    return Tensor(shape, strides, total_elems, p)
+    return Tensor { shape: shape, strides: strides, size: total_elems, data: p }
 end
 
 ## Returns default execution configuration for the tensor engine.
@@ -91,7 +114,14 @@ pub function Tensor.ones(shape) -> Tensor
 end
 
 ## Creates a Tensor from an existing flat float array.
-pub function Tensor.from_array(shape, arr) -> Tensor
+##
+## ### Parameters
+## - `shape`: Dimension size array.
+## - `arr`: Flat float element array.
+##
+## ### Returns
+## The initialized `Tensor` instance.
+pub function Tensor.from_array(shape: array, arr: array) -> Tensor
     let t = Tensor.new(shape)
     let n: int = t.size
     let arr_len: int = len(arr)
@@ -135,7 +165,14 @@ pub function Tensor.set_2d(self: Tensor, row: int, col: int, val: float)
 end
 
 ## Multi-dimensional element access using coordinate index array.
-pub function Tensor.get(self: Tensor, indices) -> float
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `indices`: Coordinate index array.
+##
+## ### Returns
+## The element float value.
+pub function Tensor.get(self: Tensor, indices: array) -> float
     let flat_idx: int = 0
     let i: int = 0
     let ndim: int = len(indices)
@@ -149,7 +186,12 @@ pub function Tensor.get(self: Tensor, indices) -> float
 end
 
 ## Multi-dimensional element update using coordinate index array.
-pub function Tensor.set(self: Tensor, indices, val: float)
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `indices`: Coordinate index array.
+## - `val`: Replacement float value.
+pub function Tensor.set(self: Tensor, indices: array, val: float)
     let flat_idx: int = 0
     let i: int = 0
     let ndim: int = len(indices)
@@ -336,17 +378,32 @@ pub function Tensor.sum(self: Tensor) -> float
 end
 
 ## Returns a new Tensor view with a reshaped dimension configuration.
-pub function Tensor.reshape(self: Tensor, new_shape) -> Tensor
+##
+## Returns the original tensor unchanged when the element count differs.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `new_shape`: Reshaped dimension size array.
+##
+## ### Returns
+## The reshaped `Tensor` view sharing the same buffer.
+pub function Tensor.reshape(self: Tensor, new_shape: array) -> Tensor
     let new_size: int = compute_size(new_shape)
     if new_size != self.size
         return self
     end
     let new_strides = compute_strides(new_shape)
-    return Tensor(new_shape, new_strides, new_size, self.data)
+    return Tensor { shape: new_shape, strides: new_strides, size: new_size, data: self.data }
 end
 
 ## Converts all tensor elements to a standard flat Alya float array.
-pub function Tensor.to_array(self: Tensor)
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+##
+## ### Returns
+## Flat float element array.
+pub function Tensor.to_array(self: Tensor) -> array
     let arr = []
     let total: int = self.size
     let i: int = 0

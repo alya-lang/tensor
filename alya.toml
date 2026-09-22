@@ -15,3 +15,12 @@ keywords = ["alya", "alya-lang", "package", "tensor", "simd", "matrix", "math", 
 # [lint]
 # disabled_rules = []
 # exclude = []
+
+# [fmt]
+# exclude = []
+
+# [test]
+# exclude = []
+
+# [bench]
+# exclude = []
