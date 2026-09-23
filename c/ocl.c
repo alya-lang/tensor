@@ -156,28 +156,64 @@ static const char *ocl_kernel_src =
     "                      int ao, int bo, int ro, int M, int N, int K) {\n"
     "    int j = get_global_id(0);\n"
     "    int i = get_global_id(1);\n"
-    "    if (i >= M || j >= N) return;\n"
+    "    int lj = get_local_id(0);\n"
+    "    int li = get_local_id(1);\n"
+    "    __local float As[16][16];\n"
+    "    __local float Bs[16][16];\n"
     "    float s = 0.0f;\n"
-    "    for (int p = 0; p < K; ++p) s += A[ao + i * K + p] * B[bo + p * N + j];\n"
-    "    C[ro + i * N + j] = s;\n"
+    "    int tiles = (K + 15) / 16;\n"
+    "    for (int t = 0; t < tiles; ++t) {\n"
+    "        int pa = t * 16 + lj;\n"
+    "        int pb = t * 16 + li;\n"
+    "        As[li][lj] = (i < M && pa < K) ? A[ao + i * K + pa] : 0.0f;\n"
+    "        Bs[li][lj] = (pb < K && j < N) ? B[bo + pb * N + j] : 0.0f;\n"
+    "        barrier(CLK_LOCAL_MEM_FENCE);\n"
+    "        for (int p = 0; p < 16; ++p) s += As[li][p] * Bs[p][lj];\n"
+    "        barrier(CLK_LOCAL_MEM_FENCE);\n"
+    "    }\n"
+    "    if (i < M && j < N) C[ro + i * N + j] = s;\n"
     "}\n"
     "__kernel void tmm_i32(__global const int* A, __global const int* B, __global int* C,\n"
     "                      int ao, int bo, int ro, int M, int N, int K) {\n"
     "    int j = get_global_id(0);\n"
     "    int i = get_global_id(1);\n"
-    "    if (i >= M || j >= N) return;\n"
+    "    int lj = get_local_id(0);\n"
+    "    int li = get_local_id(1);\n"
+    "    __local int As[16][16];\n"
+    "    __local int Bs[16][16];\n"
     "    int s = 0;\n"
-    "    for (int p = 0; p < K; ++p) s += A[ao + i * K + p] * B[bo + p * N + j];\n"
-    "    C[ro + i * N + j] = s;\n"
+    "    int tiles = (K + 15) / 16;\n"
+    "    for (int t = 0; t < tiles; ++t) {\n"
+    "        int pa = t * 16 + lj;\n"
+    "        int pb = t * 16 + li;\n"
+    "        As[li][lj] = (i < M && pa < K) ? A[ao + i * K + pa] : 0;\n"
+    "        Bs[li][lj] = (pb < K && j < N) ? B[bo + pb * N + j] : 0;\n"
+    "        barrier(CLK_LOCAL_MEM_FENCE);\n"
+    "        for (int p = 0; p < 16; ++p) s += As[li][p] * Bs[p][lj];\n"
+    "        barrier(CLK_LOCAL_MEM_FENCE);\n"
+    "    }\n"
+    "    if (i < M && j < N) C[ro + i * N + j] = s;\n"
     "}\n"
     "__kernel void tmm_i64(__global const long* A, __global const long* B, __global long* C,\n"
     "                      int ao, int bo, int ro, int M, int N, int K) {\n"
     "    int j = get_global_id(0);\n"
     "    int i = get_global_id(1);\n"
-    "    if (i >= M || j >= N) return;\n"
+    "    int lj = get_local_id(0);\n"
+    "    int li = get_local_id(1);\n"
+    "    __local long As[16][16];\n"
+    "    __local long Bs[16][16];\n"
     "    long s = 0;\n"
-    "    for (int p = 0; p < K; ++p) s += A[ao + i * K + p] * B[bo + p * N + j];\n"
-    "    C[ro + i * N + j] = s;\n"
+    "    int tiles = (K + 15) / 16;\n"
+    "    for (int t = 0; t < tiles; ++t) {\n"
+    "        int pa = t * 16 + lj;\n"
+    "        int pb = t * 16 + li;\n"
+    "        As[li][lj] = (i < M && pa < K) ? A[ao + i * K + pa] : 0L;\n"
+    "        Bs[li][lj] = (pb < K && j < N) ? B[bo + pb * N + j] : 0L;\n"
+    "        barrier(CLK_LOCAL_MEM_FENCE);\n"
+    "        for (int p = 0; p < 16; ++p) s += As[li][p] * Bs[p][lj];\n"
+    "        barrier(CLK_LOCAL_MEM_FENCE);\n"
+    "    }\n"
+    "    if (i < M && j < N) C[ro + i * N + j] = s;\n"
     "}\n"
     "#ifdef FP64\n"
     "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n"
@@ -193,10 +229,22 @@ static const char *ocl_kernel_src =
     "                      int ao, int bo, int ro, int M, int N, int K) {\n"
     "    int j = get_global_id(0);\n"
     "    int i = get_global_id(1);\n"
-    "    if (i >= M || j >= N) return;\n"
+    "    int lj = get_local_id(0);\n"
+    "    int li = get_local_id(1);\n"
+    "    __local double As[16][16];\n"
+    "    __local double Bs[16][16];\n"
     "    double s = 0.0;\n"
-    "    for (int p = 0; p < K; ++p) s += A[ao + i * K + p] * B[bo + p * N + j];\n"
-    "    C[ro + i * N + j] = s;\n"
+    "    int tiles = (K + 15) / 16;\n"
+    "    for (int t = 0; t < tiles; ++t) {\n"
+    "        int pa = t * 16 + lj;\n"
+    "        int pb = t * 16 + li;\n"
+    "        As[li][lj] = (i < M && pa < K) ? A[ao + i * K + pa] : 0.0;\n"
+    "        Bs[li][lj] = (pb < K && j < N) ? B[bo + pb * N + j] : 0.0;\n"
+    "        barrier(CLK_LOCAL_MEM_FENCE);\n"
+    "        for (int p = 0; p < 16; ++p) s += As[li][p] * Bs[p][lj];\n"
+    "        barrier(CLK_LOCAL_MEM_FENCE);\n"
+    "    }\n"
+    "    if (i < M && j < N) C[ro + i * N + j] = s;\n"
     "}\n"
     "#endif\n";
 
@@ -482,7 +530,6 @@ int32_t alya_tensor_ocl_matmul(void *ah, void *bh, void *oh, int32_t a_off, int3
                                int32_t m, int32_t n, int32_t k, int32_t dtype) {
     int ki = 0;
     cl_kernel kr = 0;
-    size_t global[2];
     ocl_init();
     if (ocl_state != 1 || !ah || !bh || !oh || m <= 0 || n <= 0 || k <= 0) return 0;
     ki = ocl_kernel_index(2, (int)dtype);
@@ -497,9 +544,17 @@ int32_t alya_tensor_ocl_matmul(void *ah, void *bh, void *oh, int32_t a_off, int3
     if (p_clSetKernelArg(kr, 6, sizeof(int32_t), &m) != CL_SUCCESS) return 0;
     if (p_clSetKernelArg(kr, 7, sizeof(int32_t), &n) != CL_SUCCESS) return 0;
     if (p_clSetKernelArg(kr, 8, sizeof(int32_t), &k) != CL_SUCCESS) return 0;
-    global[0] = (size_t)n;
-    global[1] = (size_t)m;
-    if (p_clEnqueueNDRangeKernel(ocl_queue, kr, 2, 0, global, 0, 0, 0, 0) != CL_SUCCESS) return 0;
+    {
+        // Tiled kernels run in fixed 16x16 work-groups: round the range up
+        // (out-of-range threads exit via bounds checks) and pin local size.
+        size_t rounded[2];
+        size_t local[2];
+        rounded[0] = ((size_t)n + 15) / 16 * 16;
+        rounded[1] = ((size_t)m + 15) / 16 * 16;
+        local[0] = 16;
+        local[1] = 16;
+        if (p_clEnqueueNDRangeKernel(ocl_queue, kr, 2, 0, rounded, local, 0, 0, 0) != CL_SUCCESS) return 0;
+    }
     if (p_clFinish(ocl_queue) != CL_SUCCESS) return 0;
     ocl_trace("matmul launch ok");
     return 1;

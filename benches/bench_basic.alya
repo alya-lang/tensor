@@ -246,6 +246,8 @@ function main()
     let g2s = tensor::Tensor.ones([32, 32])
     let g2 = g2s.to(2)
     g2s.free()
+    let gwarm = g1.add(g2)
+    gwarm.free()
     let n_gpu = 2000
     bench_start(runner, n_gpu)
     let gpu_idx = 0
