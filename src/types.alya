@@ -14,7 +14,8 @@ end
 ## Public enumeration of execution engine devices.
 pub enum TensorDevice
     CPU = 0,
-    SIMD = 1
+    SIMD = 1,
+    GPU = 2
 end
 
 ## Configuration data model holding execution parameters for the tensor engine.

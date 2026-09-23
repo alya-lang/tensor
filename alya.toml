@@ -12,6 +12,12 @@ keywords = ["alya", "alya-lang", "package", "tensor", "simd", "matrix", "math", 
 
 [dependencies]
 
+[build]
+links = "tensor"
+c-sources = ["c/device.c"]
+c-flags = ["-O2"]
+c-include-dirs = ["c"]
+
 # [lint]
 # disabled_rules = []
 # exclude = []

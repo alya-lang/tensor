@@ -5,12 +5,22 @@
 import "std/mem"
 
 ## Formats a 1D tensor row into a string representation.
-pub function format_vector(data_ptr: ptr, count: int) -> string
+##
+## ### Parameters
+## - `data_ptr`: Base raw pointer of the tensor buffer.
+## - `count`: Element count to format.
+## - `dtype`: Storage dtype tag (`0` = Float64, `1` = Float32, `2` = Int32, `3` = Int64).
+pub function format_vector(data_ptr: ptr, count: int, dtype: int) -> string
     let res = "["
     let i: int = 0
     while i < count
-        let val: float = read_float(data_ptr, i * 8)
-        res += str(val)
+        let val_str = when dtype
+            is 1 => str(read_f32(data_ptr, i * 4))
+            is 2 => str(read_i32(data_ptr, i * 4))
+            is 3 => str(read_int(data_ptr, i * 8))
+            else => str(read_float(data_ptr, i * 8))
+        end
+        res += val_str
         if i + 1 < count
             res += ", "
         end
@@ -24,7 +34,17 @@ end
 ##
 ## Assumes contiguous row-major layout, which every constructor in this
 ## engine guarantees (`transpose` returns a contiguous copy, never a view).
-pub function format_matrix(data_ptr: ptr, rows: int, cols: int) -> string
+##
+## ### Parameters
+## - `data_ptr`: Base raw pointer of the tensor buffer.
+## - `rows`: Row count.
+## - `cols`: Column count.
+## - `dtype`: Storage dtype tag (`0` = Float64, `1` = Float32, `2` = Int32, `3` = Int64).
+pub function format_matrix(data_ptr: ptr, rows: int, cols: int, dtype: int) -> string
+    let itemsize: int = 8
+    if dtype == 1 or dtype == 2
+        itemsize = 4
+    end
     let res = "["
     let i: int = 0
     while i < rows
@@ -34,8 +54,14 @@ pub function format_matrix(data_ptr: ptr, rows: int, cols: int) -> string
         res += "["
         let j: int = 0
         while j < cols
-            let val: float = read_float(data_ptr, (i * cols + j) * 8)
-            res += str(val)
+            let off: int = (i * cols + j) * itemsize
+            let val_str = when dtype
+                is 1 => str(read_f32(data_ptr, off))
+                is 2 => str(read_i32(data_ptr, off))
+                is 3 => str(read_int(data_ptr, off))
+                else => str(read_float(data_ptr, off))
+            end
+            res += val_str
             if j + 1 < cols
                 res += ", "
             end

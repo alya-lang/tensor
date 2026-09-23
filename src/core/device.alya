@@ -1,0 +1,38 @@
+## Tensor device execution (Phase 0: abstraction + fallback)
+##
+## Part of the Alya Language package ecosystem (https://github.com/alya-lang).
+##
+## Device placement API for tensor compute offload. The Alya side is fully
+## wired: tensors carry a `device_id`, `to()` stages explicit transfers,
+## and `device_has_accelerator()` queries the native registry in
+## `c/device.c`. No platform kernel is registered yet (count is 0 on every
+## OS), so compute always runs the CPU/SIMD kernels — loudly documented,
+## never a silent fake GPU. Platform backends (Metal / CUDA / OpenCL)
+## plug into the registry without changing user code.
+
+extern "C"
+    function alya_tensor_device_count() -> i32
+end
+
+## Reports whether any accelerator device is usable on this machine.
+##
+## Queries the native registry (`c/device.c`). Returns `false` everywhere
+## until a platform backend registers; code can branch on it to pick
+## transfer strategies.
+##
+## ### Returns
+## `true` when at least one accelerator device is available.
+pub function device_has_accelerator() -> bool
+    if alya_tensor_device_count() > 0
+        return true
+    end
+    return false
+end
+
+## Global ordering barrier for device streams.
+##
+## Phase 0 execution is synchronous, so this is a documented no-op.
+## Forward-compatible code calls it after enqueueing device work; once
+## async backends land, it becomes the fence without API changes.
+pub function synchronize()
+end

@@ -12,14 +12,17 @@ High-performance N-dimensional Tensor engine with hardware-accelerated SIMD GEMM
 ## 🌟 Features
 
 - ⚡ **SIMD Accelerated GEMM**: 4-wide unrolled matrix multiplication with FMA3/Neon hardware intrinsics
-- 🧠 **Cache-Aligned Memory**: 32-byte cache-line aligned raw memory buffers (`std/mem` aligned_alloc)
+- 💾 **Real Dtype Storage**: `Float64` (default), `Float32`, `Int32`, and `Int64` buffers with native-width loads/stores (`std/mem` narrow accessors over `cvtss2sd`/`movslq` hardware conversion)
+- 🧮 **Exact Integer Arithmetic**: integer dtypes compute in integer arithmetic (no float mediation); same-dtype enforcement with loud `throw` instead of silent promotion
 - ➕ **Element-Wise Vector Ops**: Vectorized addition (`add`), subtraction (`sub`), Hadamard multiplication (`mul`), division (`div`), and scaling (`scale`) — all with strict shape checking
 - 📊 **Fast Reductions**: Horizontal reduction summing (`sum`) plus `mean`, `min`, and `max` statistics
 - 🔄 **Zero-Copy Reshaping**: Stride-aware multidimensional views (`reshape`, `flatten`, `to_array`, `to_string` with 2D matrix rendering)
 - 🔁 **Shape Algebra**: Contiguous `transpose`, deep `copy`, `full`/`eye` constructors, in-place `fill`, and `allclose` tolerance comparison
+- 📡 **NumPy-Style Broadcasting**: Implicit right-aligned stretching in `add`/`sub`/`mul`/`div` (size-1 dimensions stretch, incompatible shapes throw), explicit zero-copy `broadcast_to` views, and `broadcast_shape` shape algebra
+- 🎛️ **Device Placement (Phase 0)**: Per-tensor `device_id` tagging (`CPU`/`SIMD`/`GPU`), explicit `to()` transfer staging, `synchronize()` barrier, and a native accelerator registry (`c/device.c`) — no backend registered yet, so compute honestly falls back to CPU/SIMD (see GPU roadmap below)
 - 🛡️ **Loud Shape Errors**: Element-wise mismatches and bad reshapes `throw` instead of silently producing garbage
 - 🔒 **Public/Private Visibility (`pub`)**: Strict encapsulation of memory internals and buffer pointers
-- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (82 assertions) and micro-benchmarks
+- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (146 assertions) and micro-benchmarks
 
 ---
 
@@ -32,11 +35,14 @@ tensor/
 │   ├── lib.alya            # Public API facade (Tensor struct, SIMD GEMM, element ops)
 │   ├── types.alya          # TensorDtype, TensorDevice, TensorConfig data models
 │   └── core/
-│       └── formatter.alya  # Vector & matrix string representation logic
+│       ├── formatter.alya  # Vector & matrix string representation logic
+│       └── device.alya     # Device placement API + native registry FFI (Phase 0)
+├── c/
+│   └── device.c            # Accelerator registry (no backend registered yet)
 ├── examples/
 │   └── demo.alya           # Runnable usage examples
 ├── tests/
-│   └── test_basic.alya     # Automated test suite (82 assertions)
+│   └── test_basic.alya     # Automated test suite (146 assertions)
 └── benches/
     └── bench_basic.alya    # Micro-benchmarks (allocation, GEMM, reductions)
 ```
@@ -107,14 +113,18 @@ main()
 
 | Symbol | Visibility | Description |
 |---|---|---|
-| `Tensor.new(shape)` | `pub function` | Allocates uninitialized Tensor of given shape with 32-byte cache-line alignment. |
-| `Tensor.zeros(shape)` | `pub function` | Creates a new Tensor initialized with all `0.0`. |
-| `Tensor.ones(shape)` | `pub function` | Creates a new Tensor initialized with all `1.0`. |
-| `Tensor.from_array(shape, arr)` | `pub function` | Creates a new Tensor initialized from a flat float array. |
-| `Tensor.full(shape, val)` | `pub function` | Creates a new Tensor with every element set to `val`. |
-| `Tensor.eye(n)` | `pub function` | Creates an n-by-n identity matrix. |
+| `Tensor.new(shape, dtype)` | `pub function` | Allocates uninitialized Tensor of given shape with 32-byte cache-line alignment (`dtype`: `0` = Float64, `1` = Float32, `2` = Int32, `3` = Int64). |
+| `Tensor.zeros(shape, dtype)` | `pub function` | Creates a new Tensor initialized with all `0` (converts to storage dtype). |
+| `Tensor.ones(shape, dtype)` | `pub function` | Creates a new Tensor initialized with all `1` (converts to storage dtype). |
+| `Tensor.from_array(shape, arr, dtype)` | `pub function` | Creates a new Tensor from a flat **float** element array (`[1.0, 2.0]`, not `[1, 2]`). |
+| `Tensor.from_array_int(shape, arr, dtype)` | `pub function` | Creates a new Tensor from a flat **integer** element array (exact storage, incl. Int64). |
+| `Tensor.full(shape, val, dtype)` | `pub function` | Creates a new Tensor with every element set to `val`. |
+| `Tensor.eye(n, dtype)` | `pub function` | Creates an n-by-n identity matrix. |
 | `Tensor.copy(self)` | `pub method` | Deep copy with a freshly allocated buffer (no aliasing). |
+| `Tensor.to_dtype(self, dtype)` | `pub method` | Converts storage dtype (float-mediated; 2^53 caveat for Int64). |
 | `Tensor.fill(self, val)` | `pub method` | Overwrites every element in place. |
+| `Tensor.get_flat_int(self, idx)` | `pub method` | Exact integer element access (no float mediation). |
+| `Tensor.set_flat_int(self, idx, val)` | `pub method` | Integer element update (integer storage). |
 | `Tensor.matmul(self, other)` | `pub method` | SIMD-accelerated 2D GEMM matrix multiplication ($M \times K \times N$). |
 | `Tensor.add(self, other)` | `pub method` | Vectorized element-wise addition of two matching-shape tensors. |
 | `Tensor.sub(self, other)` | `pub method` | Vectorized element-wise subtraction of two matching-shape tensors. |
@@ -128,17 +138,40 @@ main()
 | `Tensor.get_2d(self, row, col)` | `pub method` | Fast 2D matrix element access. |
 | `Tensor.set_2d(self, row, col, val)`| `pub method` | Fast 2D matrix element mutation. |
 | `Tensor.reshape(self, new_shape)` | `pub method` | Creates a reshaped view with updated dimension strides. Throws on element-count mismatch. |
+| `Tensor.broadcast_to(self, shape)` | `pub method` | Zero-copy broadcast view stretched to `shape` (stride-0 dims, shared buffer). |
+| `broadcast_shape(a, b)` | `pub function` | Computes the right-aligned broadcast output shape of two shape arrays. |
 | `Tensor.flatten(self)` | `pub method` | Returns a flattened rank-1 (`[size]`) view sharing the same buffer. |
 | `Tensor.transpose(self)` | `pub method` | Returns the 2D transpose as a new contiguous tensor. |
 | `Tensor.allclose(self, other, tol)` | `pub method` | Approximate element-wise equality within absolute tolerance `tol` (default `1e-9`); `false` on shape mismatch. |
 | `Tensor.to_array(self)` | `pub method` | Converts all tensor elements to a standard flat Alya float array. |
 | `Tensor.free(self)` | `pub method` | Releases 32-byte aligned buffer from heap memory. |
 | `TensorDtype` | `pub enum` | Supported numerical data types (`Float64`, `Float32`, `Int64`, `Int32`). |
-| `TensorDevice` | `pub enum` | Target execution device backend (`CPU`, `SIMD`). |
+| `TensorDevice` | `pub enum` | Target execution device backend (`CPU`, `SIMD`, `GPU`). |
 | `TensorConfig` | `pub struct` | Execution profile and threading configuration model. |
+| `Tensor.to(self, device)` | `pub method` | Exact staged copy placed on another device (shares nothing with the source). |
+| `Tensor.device_of(self)` | `pub method` | Returns the placement tag (`0` = CPU, `1` = SIMD, `2` = GPU). |
+| `Tensor.is_accelerated(self)` | `pub method` | `true` only for GPU-placed tensors on machines with a registered backend. |
+| `device_has_accelerator()` | `pub function` | Queries the native registry; `false` until a platform backend registers. |
+| `synchronize()` | `pub function` | Ordering barrier for device streams (documented no-op while execution is synchronous). |
 
 > [!NOTE]
-> **Storage model:** tensor buffers always hold 64-bit floats (`Float64`). `TensorDtype`, `TensorDevice`, and `TensorConfig` are descriptive metadata for execution profiles — no alternate-dtype storage or GPU backend exists yet. Element-wise kernels require exactly matching shapes and `throw` on mismatch; `reshape` throws (instead of returning the input) when the element count differs.
+> **Storage model:** buffers hold native-width elements (`Float64` default, `Float32`, `Int32`, `Int64` via `std/mem` narrow accessors). There is no implicit cross-dtype promotion: element-wise kernels require identical dtypes and `throw` on mismatch — convert explicitly with `to_dtype`. Value parameters are explicitly `float`, so pass `2.0`, not `2` (whole-program inference compiles each call site by its static type); integer element arrays go through `from_array_int` / `set_flat_int`. `get_flat` converts integer storage to float (exact below 2^53); use `get_flat_int` beyond that. Element-wise shape mismatches and bad reshapes `throw` instead of silently producing garbage.
+
+---
+
+## 🎛️ Device Execution & GPU Roadmap
+
+Phase 0 (shipped): the placement API is fully wired — `device_id` tagging, `to()` staging copies, `synchronize()` barrier, and the native registry (`c/device.c`, linked via `[build] c-sources`). The registry reports **0 accelerators on every OS**, so compute runs the CPU/SIMD kernels. That fallback is deliberate and tested (`is_accelerated() == false`), never a silent fake GPU — code written against `to()` today runs unchanged when backends land.
+
+| Step | Status | Notes |
+|---|---|---|
+| Placement API (`to`, `device_of`, `synchronize`) | ✅ Shipped | Tested (§14), 146 assertions green |
+| Native registry + FFI path (`c/device.c`) | ✅ Shipped | Compiles/links on all OSes via `[build]`; returns honest 0 |
+| CPU-fallback numerics for device-tagged tensors | ✅ Shipped | Placement preserved through ops, values exact |
+| Metal backend (macOS) | ⬜ Open | Needs display-machine + `c/device_metal.m` behind `c-sources-macos` |
+| CUDA backend (Windows/Linux) | ⬜ Open | Needs CUDA toolkit + `c/device_cuda.c` behind per-OS sources |
+| OpenCL fallback backend | ⬜ Open | Portable fallback once the registry protocol grows kernel entries |
+| Async streams (`synchronize` becomes a real fence) | ⬜ Open | Needs `sy::spawn` worker-thread queue in `device.alya` |
 
 ---
 

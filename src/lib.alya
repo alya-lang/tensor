@@ -8,18 +8,32 @@ import "std/mem"
 import "std/simd"
 import "./types.alya"
 import "./core/formatter.alya"
+import "./core/device.alya"
+
+## Device placement tags mirroring `TensorDevice` (`0` = CPU, `1` = SIMD,
+## `2` = GPU). Stored per tensor; Phase 0 computes on CPU/SIMD regardless
+## (see `src/core/device.alya`) — placement is forward-compatible tagging
+## plus explicit transfer points, not execution yet.
 
 ## Represents an N-dimensional Tensor backed by cache-line aligned heap memory.
+##
+## Storage dtype is fixed at construction (`0` = Float64, `1` = Float32,
+## `2` = Int32, `3` = Int64); element-wise operations require identical
+## dtypes on both sides and throw otherwise (no implicit promotion).
 ##
 ## ### Fields
 ## - `shape`: Dimension size array (e.g. `[2, 3]`).
 ## - `strides`: Row-major stride array matching `shape`.
 ## - `size`: Total element count.
+## - `dtype`: Storage dtype tag (`TensorDtype` integer value).
+## - `device_id`: Execution placement tag (`TensorDevice` integer value).
 ## - `data`: 32-byte aligned heap buffer pointer.
 pub struct Tensor
     shape: array
     strides: array
     size: int
+    dtype: int
+    device_id: int
     data: ptr
 end
 
@@ -73,6 +87,82 @@ pub function compute_size(shape: array) -> int
     return total
 end
 
+## Returns the storage width in bytes for a tensor dtype tag.
+##
+## ### Parameters
+## - `dtype`: Dtype tag (`0` = Float64, `1` = Float32, `2` = Int32, `3` = Int64).
+##
+## ### Returns
+## Bytes per element (`4` for 32-bit dtypes, `8` for 64-bit dtypes).
+## Unknown tags fall back to `8` (Float64 layout).
+pub function dtype_itemsize(dtype: int) -> int
+    return when dtype
+        is 1 => 4
+        is 2 => 4
+        is 3 => 8
+        else => 8
+    end
+end
+
+## Reports whether a dtype tag selects integer storage.
+##
+## ### Parameters
+## - `dtype`: Dtype tag.
+##
+## ### Returns
+## `true` for Int32 (`2`) and Int64 (`3`), `false` otherwise.
+function dtype_is_int(dtype: int) -> bool
+    return when dtype
+        is 2 => true
+        is 3 => true
+        else => false
+    end
+end
+
+## Reads one element as a float regardless of storage dtype.
+##
+## Integer storage converts to float; magnitudes below 2^53 convert exactly.
+## Use `get_flat_int` for exact Int64 reads beyond that range.
+function tensor_read_float(data: ptr, idx: int, dtype: int) -> float
+    when dtype
+        is 1 then return read_f32(data, idx * 4)
+        is 2 then return read_i32(data, idx * 4) + 0.0
+        is 3 then return read_int(data, idx * 8) + 0.0
+        else return read_float(data, idx * 8)
+    end
+end
+
+## Writes one element, converting the value to the storage dtype.
+## Float-to-int conversion truncates toward zero (`int()` semantics).
+## The value parameter is explicitly `float`: whole-program inference keys
+## unannotated parameters by call-site types, so mixed int/float call sites
+## would otherwise miscompile one side. Convert at the call site (`v + 0.0`).
+function tensor_write_val(data: ptr, idx: int, dtype: int, val: float)
+    when dtype
+        is 1 then write_f32(data, idx * 4, val)
+        is 2 then write_i32(data, idx * 4, int(val))
+        is 3 then write_int(data, idx * 8, int(val))
+        else write_float(data, idx * 8, val)
+    end
+end
+
+## Reads one element as an exact integer (meaningful for integer storage;
+## float storage truncates toward zero).
+function tensor_read_int(data: ptr, idx: int, dtype: int)
+    when dtype
+        is 2 then return read_i32(data, idx * 4)
+        else return read_int(data, idx * 8)
+    end
+end
+
+## Writes one element from an integer value (integer storage only).
+function tensor_write_int(data: ptr, idx: int, dtype: int, val)
+    when dtype
+        is 2 then write_i32(data, idx * 4, val)
+        else write_int(data, idx * 8, val)
+    end
+end
+
 ## Compares two shape arrays element-wise.
 ##
 ## ### Parameters
@@ -98,6 +188,125 @@ function shapes_equal_shape(a: array, b: array) -> bool
     return true
 end
 
+## Throws unless two tensors share the same storage dtype.
+##
+## There is no implicit cross-dtype promotion: `Float32 + Int32` is a
+## programming error, not a silent upcast. Convert explicitly via a
+## same-dtype copy (`to_dtype`) before combining.
+function assert_same_dtype(a: Tensor, b: Tensor)
+    if a.dtype != b.dtype
+        throw "Tensor dtype mismatch: element-wise operations require identical dtypes"
+    end
+end
+
+## Computes the broadcast output shape of two shapes (right-aligned).
+##
+## Each trailing dimension pair must be equal or one of them `1`; a `1`
+## stretches to the other size. Throws when a pair is incompatible.
+##
+## ### Parameters
+## - `a`: First shape array.
+## - `b`: Second shape array.
+##
+## ### Returns
+## The broadcast output shape array.
+pub function broadcast_shape(a: array, b: array) -> array
+    let ra: int = len(a)
+    let rb: int = len(b)
+    let rank: int = ra
+    if rb > rank
+        rank = rb
+    end
+    let out = []
+    let i: int = 0
+    while i < rank
+        out.push(1)
+        i += 1
+    end
+    let k: int = 0
+    while k < rank
+        let da: int = 1
+        let db: int = 1
+        if k < ra
+            da = a[ra - 1 - k]
+        end
+        if k < rb
+            db = b[rb - 1 - k]
+        end
+        if da != 1 and db != 1 and da != db
+            throw "Tensor shapes are not broadcast-compatible"
+        end
+        let dim: int = da
+        if db > dim
+            dim = db
+        end
+        out[rank - 1 - k] = dim
+        k += 1
+    end
+    return out
+end
+
+## Copies `src` into `res`, stretching size-1 dimensions as needed.
+##
+## `res` must have the broadcast-compatible target shape; the copy is
+## element-exact per dtype (integer storage never passes through float).
+function broadcast_copy_into(src: Tensor, res: Tensor)
+    let rank: int = len(res.shape)
+    let srank: int = len(src.shape)
+    let off: int = rank - srank
+    let total: int = res.size
+    let is_int: int = 0
+    if dtype_is_int(src.dtype)
+        is_int = 1
+    end
+    let i: int = 0
+    while i < total
+        let rem: int = i
+        let d: int = rank - 1
+        let src_idx: int = 0
+        while d >= 0
+            let dim: int = res.shape[d]
+            let coord: int = rem % dim
+            rem = (rem - coord) / dim
+            let k: int = d - off
+            if k >= 0
+                let tdim: int = src.shape[k]
+                src_idx += (coord % tdim) * src.strides[k]
+            end
+            d -= 1
+        end
+        if is_int == 1
+            res.set_flat_int(i, src.get_flat_int(src_idx))
+        else
+            res.set_flat(i, src.get_flat(src_idx))
+        end
+        i += 1
+    end
+end
+
+## Returns `t` itself when its shape already matches, otherwise a fresh
+## contiguous tensor materialized to `shape`. The return type is annotated
+## so method calls on the result keep resolving (tuple destructuring would
+## erase the struct type and break method dispatch at link time).
+## Pair with `materialized_is_temp` for the free discipline.
+function materialized_for_shape(t: Tensor, shape: array) -> Tensor
+    if shapes_equal_shape(t.shape, shape)
+        return t
+    end
+    let res = Tensor.new(shape, t.dtype, t.device_id)
+    broadcast_copy_into(t, res)
+    return res
+end
+
+## Reports whether `materialized_for_shape` copied (`true`, caller frees)
+## or borrowed `t` itself (`false`, caller must not free).
+function materialized_is_temp(t: Tensor, shape: array) -> bool
+    if shapes_equal_shape(t.shape, shape)
+        return false
+    end
+    return true
+end
+
 ## Throws unless two tensors share identical shapes.
 ##
 ## Element-wise kernels (`add`, `sub`, `mul`, `div`) require exact shape
@@ -110,15 +319,27 @@ function assert_same_shape(a: Tensor, b: Tensor)
 end
 
 ## Allocates an uninitialized Tensor of the given shape with 32-byte cache-line alignment.
-pub function Tensor.new(shape) -> Tensor
+##
+## ### Parameters
+## - `shape`: Dimension size array.
+## - `dtype`: Storage dtype tag (`0` = Float64, `1` = Float32, `2` = Int32, `3` = Int64).
+## - `device`: Execution placement tag (`0` = CPU, `1` = SIMD, `2` = GPU).
+pub function Tensor.new(shape, dtype: int = 0, device: int = 0) -> Tensor
+    if dtype < 0 or dtype > 3
+        throw "Unknown tensor dtype tag (expected 0..3)"
+    end
+    if device < 0 or device > 2
+        throw "Unknown tensor device tag (expected 0..2)"
+    end
     let total_elems: int = compute_size(shape)
     let strides = compute_strides(shape)
-    let byte_size: int = total_elems * 8
+    let itemsize: int = dtype_itemsize(dtype)
+    let byte_size: int = total_elems * itemsize
     if byte_size < 32
         byte_size = 32
     end
     let p: ptr = aligned_alloc(byte_size, 32)
-    return Tensor { shape: shape, strides: strides, size: total_elems, data: p }
+    return Tensor { shape: shape, strides: strides, size: total_elems, dtype: dtype, device_id: device, data: p }
 end
 
 ## Returns default execution configuration for the tensor engine.
@@ -127,24 +348,24 @@ pub function Tensor.default_config() -> TensorConfig
 end
 
 ## Creates a Tensor initialized with all zeros.
-pub function Tensor.zeros(shape) -> Tensor
-    let t = Tensor.new(shape)
+pub function Tensor.zeros(shape, dtype: int = 0) -> Tensor
+    let t = Tensor.new(shape, dtype)
     let i: int = 0
     let n: int = t.size
     while i < n
-        write_float(t.data, i * 8, 0.0)
+        t.set_flat(i, 0.0)
         i += 1
     end
     return t
 end
 
 ## Creates a Tensor initialized with all ones.
-pub function Tensor.ones(shape) -> Tensor
-    let t = Tensor.new(shape)
+pub function Tensor.ones(shape, dtype: int = 0) -> Tensor
+    let t = Tensor.new(shape, dtype)
     let i: int = 0
     let n: int = t.size
     while i < n
-        write_float(t.data, i * 8, 1.0)
+        t.set_flat(i, 1.0)
         i += 1
     end
     return t
@@ -152,14 +373,21 @@ end
 
 ## Creates a Tensor from an existing flat float array.
 ##
+## Elements must be floats (`[1.0, 2.0]`, not `[1, 2]`): the value crosses
+## into explicitly-`float` storage and whole-program inference compiles
+## each call site by its static type, so integers would arrive as raw bits.
+## Use `from_array_int` for integer element arrays. Values convert to the
+## storage dtype (float-to-int truncates toward zero).
+##
 ## ### Parameters
 ## - `shape`: Dimension size array.
 ## - `arr`: Flat float element array.
+## - `dtype`: Storage dtype tag (`0` = Float64, `1` = Float32, `2` = Int32, `3` = Int64).
 ##
 ## ### Returns
 ## The initialized `Tensor` instance.
-pub function Tensor.from_array(shape: array, arr: array) -> Tensor
-    let t = Tensor.new(shape)
+pub function Tensor.from_array(shape: array, arr: array, dtype: int = 0) -> Tensor
+    let t = Tensor.new(shape, dtype)
     let n: int = t.size
     let arr_len: int = len(arr)
     let limit: int = n
@@ -168,8 +396,37 @@ pub function Tensor.from_array(shape: array, arr: array) -> Tensor
     end
     let i: int = 0
     while i < limit
-        let val: float = arr[i]
-        write_float(t.data, i * 8, val)
+        let v: float = arr[i]
+        t.set_flat(i, v)
+        i += 1
+    end
+    return t
+end
+
+## Creates a Tensor from an existing flat integer array.
+##
+## The integer counterpart of `from_array`: elements must be ints, stored
+## exactly (including Int64). Values convert to the storage dtype.
+##
+## ### Parameters
+## - `shape`: Dimension size array.
+## - `arr`: Flat integer element array.
+## - `dtype`: Storage dtype tag (`2` = Int32, `3` = Int64; defaults to Int32).
+##
+## ### Returns
+## The initialized `Tensor` instance.
+pub function Tensor.from_array_int(shape: array, arr: array, dtype: int = 2) -> Tensor
+    let t = Tensor.new(shape, dtype)
+    let n: int = t.size
+    let arr_len: int = len(arr)
+    let limit: int = n
+    if arr_len < limit
+        limit = arr_len
+    end
+    let i: int = 0
+    while i < limit
+        let v: int = arr[i]
+        t.set_flat_int(i, v)
         i += 1
     end
     return t
@@ -179,25 +436,27 @@ end
 ##
 ## ### Parameters
 ## - `shape`: Dimension size array.
-## - `val`: Fill value written to every element.
+## - `val`: Fill value written to every element (converts to storage dtype).
+## - `dtype`: Storage dtype tag (`0` = Float64, `1` = Float32, `2` = Int32, `3` = Int64).
 ##
 ## ### Returns
 ## The initialized `Tensor` instance.
-pub function Tensor.full(shape: array, val: float) -> Tensor
-    let t = Tensor.new(shape)
+pub function Tensor.full(shape: array, val: float, dtype: int = 0) -> Tensor
+    let t = Tensor.new(shape, dtype)
     t.fill(val)
     return t
 end
 
-## Creates an n-by-n identity matrix (1.0 on the diagonal, 0.0 elsewhere).
+## Creates an n-by-n identity matrix (1 on the diagonal, 0 elsewhere).
 ##
 ## ### Parameters
 ## - `n`: Row and column count of the square matrix.
+## - `dtype`: Storage dtype tag (`0` = Float64, `1` = Float32, `2` = Int32, `3` = Int64).
 ##
 ## ### Returns
 ## The initialized `Tensor` instance with shape `[n, n]`.
-pub function Tensor.eye(n: int) -> Tensor
-    let t = Tensor.zeros([n, n])
+pub function Tensor.eye(n: int, dtype: int = 0) -> Tensor
+    let t = Tensor.zeros([n, n], dtype)
     let i: int = 0
     while i < n
         t.set_2d(i, i, 1.0)
@@ -215,9 +474,9 @@ end
 ## - `self`: The source `Tensor` instance.
 ##
 ## ### Returns
-## An independent `Tensor` with identical shape and contents.
+## An independent `Tensor` with identical shape, dtype, and contents.
 pub function Tensor.copy(self: Tensor) -> Tensor
-    let res = Tensor.new(self.shape)
+    let res = Tensor.new(self.shape, self.dtype, self.device_id)
     let total: int = self.size
     let i: int = 0
     while i < total
@@ -227,21 +486,108 @@ pub function Tensor.copy(self: Tensor) -> Tensor
     return res
 end
 
-## Direct flat element access.
-pub function Tensor.get_flat(self: Tensor, idx: int) -> float
-    return read_float(self.data, idx * 8)
+## Returns a copy of the tensor converted to another storage dtype.
+##
+## Conversion passes through float: Int64 magnitudes beyond 2^53 may lose
+## precision, and float-to-int truncates toward zero.
+##
+## ### Parameters
+## - `self`: The source `Tensor` instance.
+## - `dtype`: Target storage dtype tag (`0` = Float64, `1` = Float32, `2` = Int32, `3` = Int64).
+##
+## ### Returns
+## An independent `Tensor` with identical shape and converted contents.
+pub function Tensor.to_dtype(self: Tensor, dtype: int) -> Tensor
+    let res = Tensor.new(self.shape, dtype, self.device_id)
+    let total: int = self.size
+    let i: int = 0
+    while i < total
+        res.set_flat(i, self.get_flat(i))
+        i += 1
+    end
+    return res
 end
 
-## Direct flat element update.
+## Returns a copy of the tensor placed on another device.
+##
+## The transfer is an exact staged copy (same shape, dtype, and values on
+## a fresh buffer tagged with `device`). Phase 0 has no accelerator
+## backend, so a GPU-tagged tensor still computes on CPU/SIMD — check
+## `is_accelerated` when placement must mean execution.
+##
+## ### Parameters
+## - `self`: The source `Tensor` instance.
+## - `device`: Target placement tag (`0` = CPU, `1` = SIMD, `2` = GPU).
+##
+## ### Returns
+## An independent `Tensor` on the target device.
+pub function Tensor.to(self: Tensor, device: int) -> Tensor
+    if device < 0 or device > 2
+        throw "Unknown tensor device tag (expected 0..2)"
+    end
+    let res = Tensor.new(self.shape, self.dtype, device)
+    broadcast_copy_into(self, res)
+    return res
+end
+
+## Returns the execution placement tag of the tensor.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+##
+## ### Returns
+## `0` (CPU), `1` (SIMD), or `2` (GPU).
+pub function Tensor.device_of(self: Tensor) -> int
+    return self.device_id
+end
+
+## Reports whether this tensor is placed on a usable accelerator.
+##
+## Placement alone (`device_id == 2`) is tagging; execution additionally
+## needs a registered native backend (`device_has_accelerator`). Phase 0
+## always returns `false` for GPU tensors — the honest fallback signal.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+##
+## ### Returns
+## `true` only for GPU-placed tensors on machines with a backend.
+pub function Tensor.is_accelerated(self: Tensor) -> bool
+    if self.device_id != 2
+        return false
+    end
+    return device_has_accelerator()
+end
+
+## Direct flat element access (integer storage converts to float;
+## magnitudes below 2^53 convert exactly).
+pub function Tensor.get_flat(self: Tensor, idx: int) -> float
+    return tensor_read_float(self.data, idx, self.dtype)
+end
+
+## Direct flat element update (value converts to storage dtype).
 pub function Tensor.set_flat(self: Tensor, idx: int, val: float)
-    write_float(self.data, idx * 8, val)
+    tensor_write_val(self.data, idx, self.dtype, val)
+end
+
+## Exact integer flat element access.
+##
+## Integer storage reads exactly (including Int64 beyond 2^53); float
+## storage truncates toward zero.
+pub function Tensor.get_flat_int(self: Tensor, idx: int)
+    return tensor_read_int(self.data, idx, self.dtype)
+end
+
+## Integer flat element update (meaningful for integer storage).
+pub function Tensor.set_flat_int(self: Tensor, idx: int, val)
+    tensor_write_int(self.data, idx, self.dtype, val)
 end
 
 ## Overwrites every element of the tensor in place.
 ##
 ## ### Parameters
 ## - `self`: The target `Tensor` instance.
-## - `val`: Fill value written to every element.
+## - `val`: Fill value written to every element (converts to storage dtype).
 pub function Tensor.fill(self: Tensor, val: float)
     let total: int = self.size
     let i: int = 0
@@ -256,15 +602,15 @@ pub function Tensor.get_2d(self: Tensor, row: int, col: int) -> float
     let s0: int = self.strides[0]
     let s1: int = self.strides[1]
     let idx: int = row * s0 + col * s1
-    return read_float(self.data, idx * 8)
+    return tensor_read_float(self.data, idx, self.dtype)
 end
 
-## Fast 2D matrix element update.
+## Fast 2D matrix element update (value converts to storage dtype).
 pub function Tensor.set_2d(self: Tensor, row: int, col: int, val: float)
     let s0: int = self.strides[0]
     let s1: int = self.strides[1]
     let idx: int = row * s0 + col * s1
-    write_float(self.data, idx * 8, val)
+    tensor_write_val(self.data, idx, self.dtype, val)
 end
 
 ## Multi-dimensional element access using coordinate index array.
@@ -285,7 +631,7 @@ pub function Tensor.get(self: Tensor, indices: array) -> float
         flat_idx += coord * st
         i += 1
     end
-    return read_float(self.data, flat_idx * 8)
+    return tensor_read_float(self.data, flat_idx, self.dtype)
 end
 
 ## Multi-dimensional element update using coordinate index array.
@@ -293,7 +639,7 @@ end
 ## ### Parameters
 ## - `self`: The target `Tensor` instance.
 ## - `indices`: Coordinate index array.
-## - `val`: Replacement float value.
+## - `val`: Replacement value (converts to storage dtype).
 pub function Tensor.set(self: Tensor, indices: array, val: float)
     let flat_idx: int = 0
     let i: int = 0
@@ -304,12 +650,14 @@ pub function Tensor.set(self: Tensor, indices: array, val: float)
         flat_idx += coord * st
         i += 1
     end
-    write_float(self.data, flat_idx * 8, val)
+    tensor_write_val(self.data, flat_idx, self.dtype, val)
 end
 
 ## High-Performance SIMD-Accelerated 2D GEMM (General Matrix Multiply).
 ## Multiplies self (M x K) by other (K x N) to produce result (M x N).
 ## Inner dot loop uses 4-way SIMD lane unrolling and FMA3 instructions.
+## Both operands must share the storage dtype; integer dtypes accumulate
+## in exact integer arithmetic (overflow wraps, C-style).
 pub function Tensor.matmul(self: Tensor, other: Tensor) -> Tensor
     let m: int = self.shape[0]
     let k: int = self.shape[1]
@@ -318,9 +666,14 @@ pub function Tensor.matmul(self: Tensor, other: Tensor) -> Tensor
     if k != k2
         throw "Incompatible tensor dimensions for matrix multiplication"
     end
+    assert_same_dtype(self, other)
 
     let out_shape = [m, n]
-    let res = Tensor.new(out_shape)
+    let res = Tensor.new(out_shape, self.dtype, self.device_id)
+
+    if dtype_is_int(self.dtype)
+        return matmul_int_into(self, other, res, m, n, k)
+    end
 
     let i: int = 0
     while i < m
@@ -355,148 +708,368 @@ pub function Tensor.matmul(self: Tensor, other: Tensor) -> Tensor
     return res
 end
 
-## Element-wise addition of two identically-shaped tensors (4-wide unrolled).
-pub function Tensor.add(self: Tensor, other: Tensor) -> Tensor
-    assert_same_shape(self, other)
-    let res = Tensor.new(self.shape)
-    let total: int = self.size
+## Integer-dtype GEMM core shared by `matmul` (exact integer accumulation).
+## Uses strided 2D indexing (like the float path) so reshaped views behave
+## identically in both dtypes.
+function matmul_int_into(a: Tensor, b: Tensor, res: Tensor, m: int, n: int, k: int) -> Tensor
+    let a_s0: int = a.strides[0]
+    let a_s1: int = a.strides[1]
+    let b_s0: int = b.strides[0]
+    let b_s1: int = b.strides[1]
     let i: int = 0
-    let unroll_limit: int = total - 3
-    while i < unroll_limit
-        let a0: float = self.get_flat(i)
-        let b0: float = other.get_flat(i)
-        let a1: float = self.get_flat(i + 1)
-        let b1: float = other.get_flat(i + 1)
-        let a2: float = self.get_flat(i + 2)
-        let b2: float = other.get_flat(i + 2)
-        let a3: float = self.get_flat(i + 3)
-        let b3: float = other.get_flat(i + 3)
-        res.set_flat(i, a0 + b0)
-        res.set_flat(i + 1, a1 + b1)
-        res.set_flat(i + 2, a2 + b2)
-        res.set_flat(i + 3, a3 + b3)
-        i += 4
-    end
-    while i < total
-        let a_val: float = self.get_flat(i)
-        let b_val: float = other.get_flat(i)
-        res.set_flat(i, a_val + b_val)
+    while i < m
+        let j: int = 0
+        while j < n
+            let sum = 0
+            let p: int = 0
+            let unroll_limit: int = k - 3
+            while p < unroll_limit
+                let a0 = a.get_flat_int(i * a_s0 + p * a_s1)
+                let b0 = b.get_flat_int(p * b_s0 + j * b_s1)
+                let a1 = a.get_flat_int(i * a_s0 + (p + 1) * a_s1)
+                let b1 = b.get_flat_int((p + 1) * b_s0 + j * b_s1)
+                let a2 = a.get_flat_int(i * a_s0 + (p + 2) * a_s1)
+                let b2 = b.get_flat_int((p + 2) * b_s0 + j * b_s1)
+                let a3 = a.get_flat_int(i * a_s0 + (p + 3) * a_s1)
+                let b3 = b.get_flat_int((p + 3) * b_s0 + j * b_s1)
+                sum += (a0 * b0) + (a1 * b1) + (a2 * b2) + (a3 * b3)
+                p += 4
+            end
+            while p < k
+                sum += a.get_flat_int(i * a_s0 + p * a_s1) * b.get_flat_int(p * b_s0 + j * b_s1)
+                p += 1
+            end
+            res.set_flat_int(i * n + j, sum)
+            j += 1
+        end
         i += 1
     end
     return res
 end
 
-## Element-wise subtraction of two identically-shaped tensors (4-wide unrolled).
-pub function Tensor.sub(self: Tensor, other: Tensor) -> Tensor
-    assert_same_shape(self, other)
-    let res = Tensor.new(self.shape)
-    let total: int = self.size
-    let i: int = 0
-    let unroll_limit: int = total - 3
-    while i < unroll_limit
-        let a0: float = self.get_flat(i)
-        let b0: float = other.get_flat(i)
-        let a1: float = self.get_flat(i + 1)
-        let b1: float = other.get_flat(i + 1)
-        let a2: float = self.get_flat(i + 2)
-        let b2: float = other.get_flat(i + 2)
-        let a3: float = self.get_flat(i + 3)
-        let b3: float = other.get_flat(i + 3)
-        res.set_flat(i, a0 - b0)
-        res.set_flat(i + 1, a1 - b1)
-        res.set_flat(i + 2, a2 - b2)
-        res.set_flat(i + 3, a3 - b3)
-        i += 4
-    end
-    while i < total
-        let a_val: float = self.get_flat(i)
-        let b_val: float = other.get_flat(i)
-        res.set_flat(i, a_val - b_val)
-        i += 1
-    end
-    return res
-end
-
-## Element-wise multiplication of two identically-shaped tensors (4-wide unrolled Hadamard product).
-pub function Tensor.mul(self: Tensor, other: Tensor) -> Tensor
-    assert_same_shape(self, other)
-    let res = Tensor.new(self.shape)
-    let total: int = self.size
-    let i: int = 0
-    let unroll_limit: int = total - 3
-    while i < unroll_limit
-        let a0: float = self.get_flat(i)
-        let b0: float = other.get_flat(i)
-        let a1: float = self.get_flat(i + 1)
-        let b1: float = other.get_flat(i + 1)
-        let a2: float = self.get_flat(i + 2)
-        let b2: float = other.get_flat(i + 2)
-        let a3: float = self.get_flat(i + 3)
-        let b3: float = other.get_flat(i + 3)
-        res.set_flat(i, a0 * b0)
-        res.set_flat(i + 1, a1 * b1)
-        res.set_flat(i + 2, a2 * b2)
-        res.set_flat(i + 3, a3 * b3)
-        i += 4
-    end
-    while i < total
-        let a_val: float = self.get_flat(i)
-        let b_val: float = other.get_flat(i)
-        res.set_flat(i, a_val * b_val)
-        i += 1
-    end
-    return res
-end
-
-## Element-wise division of two identically-shaped tensors (4-wide unrolled).
+## Element-wise addition with NumPy-style broadcasting (4-wide unrolled).
 ##
-## Shapes must match exactly; a mismatch throws. Division by zero follows
-## IEEE-754 float semantics (`inf` / `-inf` / `nan`).
+## Shapes broadcast right-aligned (size-1 dimensions stretch); incompatible
+## shapes throw. A scalar adds via a `[1]` tensor: `t.add(Tensor.full([1], 2.0))`.
+pub function Tensor.add(self: Tensor, other: Tensor) -> Tensor
+    assert_same_dtype(self, other)
+    let out_shape = broadcast_shape(self.shape, other.shape)
+    let lhs = materialized_for_shape(self, out_shape)
+    let rhs = materialized_for_shape(other, out_shape)
+    let lhs_tmp = materialized_is_temp(self, out_shape)
+    let rhs_tmp = materialized_is_temp(other, out_shape)
+    let res = Tensor.new(out_shape, self.dtype, self.device_id)
+    if dtype_is_int(self.dtype)
+        add_int_tensors(lhs, rhs, res)
+    else
+        let total: int = res.size
+        let i: int = 0
+        let unroll_limit: int = total - 3
+        while i < unroll_limit
+            let a0: float = lhs.get_flat(i)
+            let b0: float = rhs.get_flat(i)
+            let a1: float = lhs.get_flat(i + 1)
+            let b1: float = rhs.get_flat(i + 1)
+            let a2: float = lhs.get_flat(i + 2)
+            let b2: float = rhs.get_flat(i + 2)
+            let a3: float = lhs.get_flat(i + 3)
+            let b3: float = rhs.get_flat(i + 3)
+            res.set_flat(i, a0 + b0)
+            res.set_flat(i + 1, a1 + b1)
+            res.set_flat(i + 2, a2 + b2)
+            res.set_flat(i + 3, a3 + b3)
+            i += 4
+        end
+        while i < total
+            let a_val: float = lhs.get_flat(i)
+            let b_val: float = rhs.get_flat(i)
+            res.set_flat(i, a_val + b_val)
+            i += 1
+        end
+    end
+    if lhs_tmp
+        lhs.free()
+    end
+    if rhs_tmp
+        rhs.free()
+    end
+    return res
+end
+
+## Element-wise subtraction with NumPy-style broadcasting (4-wide unrolled).
+##
+## Shapes broadcast right-aligned (size-1 dimensions stretch); incompatible
+## shapes throw.
+pub function Tensor.sub(self: Tensor, other: Tensor) -> Tensor
+    assert_same_dtype(self, other)
+    let out_shape = broadcast_shape(self.shape, other.shape)
+    let lhs = materialized_for_shape(self, out_shape)
+    let rhs = materialized_for_shape(other, out_shape)
+    let lhs_tmp = materialized_is_temp(self, out_shape)
+    let rhs_tmp = materialized_is_temp(other, out_shape)
+    let res = Tensor.new(out_shape, self.dtype, self.device_id)
+    if dtype_is_int(self.dtype)
+        sub_int_tensors(lhs, rhs, res)
+    else
+        let total: int = res.size
+        let i: int = 0
+        let unroll_limit: int = total - 3
+        while i < unroll_limit
+            let a0: float = lhs.get_flat(i)
+            let b0: float = rhs.get_flat(i)
+            let a1: float = lhs.get_flat(i + 1)
+            let b1: float = rhs.get_flat(i + 1)
+            let a2: float = lhs.get_flat(i + 2)
+            let b2: float = rhs.get_flat(i + 2)
+            let a3: float = lhs.get_flat(i + 3)
+            let b3: float = rhs.get_flat(i + 3)
+            res.set_flat(i, a0 - b0)
+            res.set_flat(i + 1, a1 - b1)
+            res.set_flat(i + 2, a2 - b2)
+            res.set_flat(i + 3, a3 - b3)
+            i += 4
+        end
+        while i < total
+            let a_val: float = lhs.get_flat(i)
+            let b_val: float = rhs.get_flat(i)
+            res.set_flat(i, a_val - b_val)
+            i += 1
+        end
+    end
+    if lhs_tmp
+        lhs.free()
+    end
+    if rhs_tmp
+        rhs.free()
+    end
+    return res
+end
+
+## Element-wise multiplication with NumPy-style broadcasting (4-wide unrolled Hadamard product).
+##
+## Shapes broadcast right-aligned (size-1 dimensions stretch); incompatible
+## shapes throw.
+pub function Tensor.mul(self: Tensor, other: Tensor) -> Tensor
+    assert_same_dtype(self, other)
+    let out_shape = broadcast_shape(self.shape, other.shape)
+    let lhs = materialized_for_shape(self, out_shape)
+    let rhs = materialized_for_shape(other, out_shape)
+    let lhs_tmp = materialized_is_temp(self, out_shape)
+    let rhs_tmp = materialized_is_temp(other, out_shape)
+    let res = Tensor.new(out_shape, self.dtype, self.device_id)
+    if dtype_is_int(self.dtype)
+        mul_int_tensors(lhs, rhs, res)
+    else
+        let total: int = res.size
+        let i: int = 0
+        let unroll_limit: int = total - 3
+        while i < unroll_limit
+            let a0: float = lhs.get_flat(i)
+            let b0: float = rhs.get_flat(i)
+            let a1: float = lhs.get_flat(i + 1)
+            let b1: float = rhs.get_flat(i + 1)
+            let a2: float = lhs.get_flat(i + 2)
+            let b2: float = rhs.get_flat(i + 2)
+            let a3: float = lhs.get_flat(i + 3)
+            let b3: float = rhs.get_flat(i + 3)
+            res.set_flat(i, a0 * b0)
+            res.set_flat(i + 1, a1 * b1)
+            res.set_flat(i + 2, a2 * b2)
+            res.set_flat(i + 3, a3 * b3)
+            i += 4
+        end
+        while i < total
+            let a_val: float = lhs.get_flat(i)
+            let b_val: float = rhs.get_flat(i)
+            res.set_flat(i, a_val * b_val)
+            i += 1
+        end
+    end
+    if lhs_tmp
+        lhs.free()
+    end
+    if rhs_tmp
+        rhs.free()
+    end
+    return res
+end
+
+## Element-wise division with NumPy-style broadcasting (4-wide unrolled).
+##
+## Shapes broadcast right-aligned (size-1 dimensions stretch); incompatible
+## shapes throw. Float division by zero follows IEEE-754 semantics
+## (`inf` / `-inf` / `nan`); integer division truncates toward zero and
+## throws on a zero divisor.
 pub function Tensor.div(self: Tensor, other: Tensor) -> Tensor
-    assert_same_shape(self, other)
-    let res = Tensor.new(self.shape)
-    let total: int = self.size
+    assert_same_dtype(self, other)
+    let out_shape = broadcast_shape(self.shape, other.shape)
+    let lhs = materialized_for_shape(self, out_shape)
+    let rhs = materialized_for_shape(other, out_shape)
+    let lhs_tmp = materialized_is_temp(self, out_shape)
+    let rhs_tmp = materialized_is_temp(other, out_shape)
+    let res = Tensor.new(out_shape, self.dtype, self.device_id)
+    if dtype_is_int(self.dtype)
+        div_int_tensors(lhs, rhs, res)
+    else
+        let total: int = res.size
+        let i: int = 0
+        let unroll_limit: int = total - 3
+        while i < unroll_limit
+            let a0: float = lhs.get_flat(i)
+            let b0: float = rhs.get_flat(i)
+            let a1: float = lhs.get_flat(i + 1)
+            let b1: float = rhs.get_flat(i + 1)
+            let a2: float = lhs.get_flat(i + 2)
+            let b2: float = rhs.get_flat(i + 2)
+            let a3: float = lhs.get_flat(i + 3)
+            let b3: float = rhs.get_flat(i + 3)
+            res.set_flat(i, a0 / b0)
+            res.set_flat(i + 1, a1 / b1)
+            res.set_flat(i + 2, a2 / b2)
+            res.set_flat(i + 3, a3 / b3)
+            i += 4
+        end
+        while i < total
+            let a_val: float = lhs.get_flat(i)
+            let b_val: float = rhs.get_flat(i)
+            res.set_flat(i, a_val / b_val)
+            i += 1
+        end
+    end
+    if lhs_tmp
+        lhs.free()
+    end
+    if rhs_tmp
+        rhs.free()
+    end
+    return res
+end
+
+## Integer-dtype element-wise kernels shared by `add`/`sub`/`mul`/`div`.
+## Exact integer arithmetic; integer division truncates toward zero
+## (C-style) and throws on a zero divisor (pre-scanned before writing).
+function add_int_tensors(a: Tensor, b: Tensor, res: Tensor) -> Tensor
+    let total: int = a.size
     let i: int = 0
     let unroll_limit: int = total - 3
     while i < unroll_limit
-        let a0: float = self.get_flat(i)
-        let b0: float = other.get_flat(i)
-        let a1: float = self.get_flat(i + 1)
-        let b1: float = other.get_flat(i + 1)
-        let a2: float = self.get_flat(i + 2)
-        let b2: float = other.get_flat(i + 2)
-        let a3: float = self.get_flat(i + 3)
-        let b3: float = other.get_flat(i + 3)
-        res.set_flat(i, a0 / b0)
-        res.set_flat(i + 1, a1 / b1)
-        res.set_flat(i + 2, a2 / b2)
-        res.set_flat(i + 3, a3 / b3)
+        res.set_flat_int(i, a.get_flat_int(i) + b.get_flat_int(i))
+        res.set_flat_int(i + 1, a.get_flat_int(i + 1) + b.get_flat_int(i + 1))
+        res.set_flat_int(i + 2, a.get_flat_int(i + 2) + b.get_flat_int(i + 2))
+        res.set_flat_int(i + 3, a.get_flat_int(i + 3) + b.get_flat_int(i + 3))
         i += 4
     end
     while i < total
-        let a_val: float = self.get_flat(i)
-        let b_val: float = other.get_flat(i)
-        res.set_flat(i, a_val / b_val)
+        res.set_flat_int(i, a.get_flat_int(i) + b.get_flat_int(i))
         i += 1
     end
     return res
 end
 
-## Scales all elements by a scalar float multiplier.
-pub function Tensor.scale(self: Tensor, factor: float) -> Tensor
-    let res = Tensor.new(self.shape)
-    let total: int = self.size
+function sub_int_tensors(a: Tensor, b: Tensor, res: Tensor) -> Tensor
+    let total: int = a.size
+    let i: int = 0
+    let unroll_limit: int = total - 3
+    while i < unroll_limit
+        res.set_flat_int(i, a.get_flat_int(i) - b.get_flat_int(i))
+        res.set_flat_int(i + 1, a.get_flat_int(i + 1) - b.get_flat_int(i + 1))
+        res.set_flat_int(i + 2, a.get_flat_int(i + 2) - b.get_flat_int(i + 2))
+        res.set_flat_int(i + 3, a.get_flat_int(i + 3) - b.get_flat_int(i + 3))
+        i += 4
+    end
+    while i < total
+        res.set_flat_int(i, a.get_flat_int(i) - b.get_flat_int(i))
+        i += 1
+    end
+    return res
+end
+
+function mul_int_tensors(a: Tensor, b: Tensor, res: Tensor) -> Tensor
+    let total: int = a.size
+    let i: int = 0
+    let unroll_limit: int = total - 3
+    while i < unroll_limit
+        res.set_flat_int(i, a.get_flat_int(i) * b.get_flat_int(i))
+        res.set_flat_int(i + 1, a.get_flat_int(i + 1) * b.get_flat_int(i + 1))
+        res.set_flat_int(i + 2, a.get_flat_int(i + 2) * b.get_flat_int(i + 2))
+        res.set_flat_int(i + 3, a.get_flat_int(i + 3) * b.get_flat_int(i + 3))
+        i += 4
+    end
+    while i < total
+        res.set_flat_int(i, a.get_flat_int(i) * b.get_flat_int(i))
+        i += 1
+    end
+    return res
+end
+
+function div_int_tensors(a: Tensor, b: Tensor, res: Tensor) -> Tensor
+    let total: int = a.size
     let i: int = 0
     while i < total
-        let v: float = self.get_flat(i)
-        res.set_flat(i, v * factor)
+        if b.get_flat_int(i) == 0
+            throw "Integer division by zero in Tensor.div"
+        end
         i += 1
+    end
+    let j: int = 0
+    let unroll_limit: int = total - 3
+    while j < unroll_limit
+        res.set_flat_int(j, a.get_flat_int(j) / b.get_flat_int(j))
+        res.set_flat_int(j + 1, a.get_flat_int(j + 1) / b.get_flat_int(j + 1))
+        res.set_flat_int(j + 2, a.get_flat_int(j + 2) / b.get_flat_int(j + 2))
+        res.set_flat_int(j + 3, a.get_flat_int(j + 3) / b.get_flat_int(j + 3))
+        j += 4
+    end
+    while j < total
+        res.set_flat_int(j, a.get_flat_int(j) / b.get_flat_int(j))
+        j += 1
+    end
+    return res
+end
+
+## Scales all elements by a scalar multiplier.
+##
+## The factor converts per element for integer storage (truncation toward
+## zero applies to non-integral results).
+pub function Tensor.scale(self: Tensor, factor: float) -> Tensor
+    let res = Tensor.new(self.shape, self.dtype, self.device_id)
+    let total: int = self.size
+    if dtype_is_int(self.dtype)
+        let i: int = 0
+        while i < total
+            res.set_flat_int(i, int(self.get_flat_int(i) * factor))
+            i += 1
+        end
+        return res
+    end
+    let j: int = 0
+    while j < total
+        let v: float = self.get_flat(j)
+        res.set_flat(j, v * factor)
+        j += 1
     end
     return res
 end
 
 ## Computes the scalar sum of all elements in the tensor (4-way unrolled).
+## Integer storage accumulates exactly in integer arithmetic; the final
+## total converts to float (exact below 2^53).
 pub function Tensor.sum(self: Tensor) -> float
+    if dtype_is_int(self.dtype)
+        let acc = 0
+        let total: int = self.size
+        let i: int = 0
+        let unroll_limit: int = total - 3
+        while i < unroll_limit
+            acc += (self.get_flat_int(i) + self.get_flat_int(i + 1)) + (self.get_flat_int(i + 2) + self.get_flat_int(i + 3))
+            i += 4
+        end
+        while i < total
+            acc += self.get_flat_int(i)
+            i += 1
+        end
+        return acc + 0.0
+    end
     let total_sum: float = 0.0
     let total: int = self.size
     let i: int = 0
@@ -530,6 +1103,18 @@ pub function Tensor.min(self: Tensor) -> float
     if self.size == 0
         throw "Cannot compute min of an empty tensor"
     end
+    if dtype_is_int(self.dtype)
+        let best = self.get_flat_int(0)
+        let i: int = 1
+        while i < self.size
+            let v = self.get_flat_int(i)
+            if v < best
+                best = v
+            end
+            i += 1
+        end
+        return best + 0.0
+    end
     let best: float = self.get_flat(0)
     let i: int = 1
     while i < self.size
@@ -546,6 +1131,18 @@ end
 pub function Tensor.max(self: Tensor) -> float
     if self.size == 0
         throw "Cannot compute max of an empty tensor"
+    end
+    if dtype_is_int(self.dtype)
+        let best = self.get_flat_int(0)
+        let i: int = 1
+        while i < self.size
+            let v = self.get_flat_int(i)
+            if v > best
+                best = v
+            end
+            i += 1
+        end
+        return best + 0.0
     end
     let best: float = self.get_flat(0)
     let i: int = 1
@@ -576,7 +1173,7 @@ pub function Tensor.reshape(self: Tensor, new_shape: array) -> Tensor
         throw "Cannot reshape tensor: element count mismatch"
     end
     let new_strides = compute_strides(new_shape)
-    return Tensor { shape: new_shape, strides: new_strides, size: new_size, data: self.data }
+    return Tensor { shape: new_shape, strides: new_strides, size: new_size, dtype: self.dtype, device_id: self.device_id, data: self.data }
 end
 
 ## Returns a flattened 1D view of the tensor.
@@ -607,7 +1204,7 @@ pub function Tensor.transpose(self: Tensor) -> Tensor
     end
     let rows: int = self.shape[0]
     let cols: int = self.shape[1]
-    let res = Tensor.new([cols, rows])
+    let res = Tensor.new([cols, rows], self.dtype, self.device_id)
     let i: int = 0
     while i < rows
         let j: int = 0
@@ -618,6 +1215,59 @@ pub function Tensor.transpose(self: Tensor) -> Tensor
         i += 1
     end
     return res
+end
+
+## Returns a broadcast view of the tensor stretched to `shape`.
+##
+## Size-1 dimensions stretch with stride `0` (no data is copied); every
+## other dimension must already match. Throws when `shape` is incompatible.
+## The view aliases the same buffer: writes through either handle are
+## visible in the other, and only the owner frees the buffer.
+##
+## Element-wise operations (`add`/`sub`/`mul`/`div`) broadcast implicitly,
+## so this is needed only when the stretched view itself is required.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `shape`: Target shape array with rank >= `self` rank.
+##
+## ### Returns
+## A `Tensor` view sharing the same buffer with broadcast strides.
+pub function Tensor.broadcast_to(self: Tensor, shape: array) -> Tensor
+    let rank: int = len(shape)
+    let srank: int = len(self.shape)
+    if srank > rank
+        throw "Cannot broadcast tensor to fewer dimensions"
+    end
+    let off: int = rank - srank
+    let new_strides = []
+    let d: int = 0
+    while d < rank
+        new_strides.push(0)
+        d += 1
+    end
+    let e: int = 0
+    while e < rank
+        let want: int = shape[e]
+        let k: int = e - off
+        if k < 0
+            if want < 1
+                throw "Tensor broadcast_to rejects empty target dimensions"
+            end
+            new_strides[e] = 0
+        else
+            let have: int = self.shape[k]
+            if have == 1
+                new_strides[e] = 0
+            elif have == want
+                new_strides[e] = self.strides[k]
+            else
+                throw "Tensor shapes are not broadcast-compatible"
+            end
+        end
+        e += 1
+    end
+    return Tensor { shape: shape, strides: new_strides, size: compute_size(shape), dtype: self.dtype, device_id: self.device_id, data: self.data }
 end
 
 ## Converts all tensor elements to a standard flat Alya float array.
@@ -641,8 +1291,8 @@ end
 
 ## Element-wise approximate equality within an absolute tolerance.
 ##
-## Returns `false` (rather than throwing) when shapes differ, so it can be
-## used directly as a test predicate.
+## Returns `false` (rather than throwing) when shapes or dtypes differ, so
+## it can be used directly as a test predicate.
 ##
 ## ### Parameters
 ## - `self`: The target `Tensor` instance.
@@ -650,9 +1300,12 @@ end
 ## - `tol`: Maximum allowed absolute element difference.
 ##
 ## ### Returns
-## `true` when shapes match and every element pair is within `tol`.
+## `true` when shapes and dtypes match and every element pair is within `tol`.
 pub function Tensor.allclose(self: Tensor, other: Tensor, tol: float = 0.000000001) -> bool
     if shapes_equal_shape(self.shape, other.shape) == false
+        return false
+    end
+    if self.dtype != other.dtype
         return false
     end
     let total: int = self.size
@@ -675,9 +1328,9 @@ pub function Tensor.to_string(self: Tensor) -> string
     if len(self.shape) == 2
         let rows: int = self.shape[0]
         let cols: int = self.shape[1]
-        return format_matrix(self.data, rows, cols)
+        return format_matrix(self.data, rows, cols, self.dtype)
     end
-    return format_vector(self.data, self.size)
+    return format_vector(self.data, self.size, self.dtype)
 end
 
 ## Releases the 32-byte aligned heap buffer allocated for this tensor.

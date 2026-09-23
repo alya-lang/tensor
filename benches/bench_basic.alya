@@ -113,6 +113,49 @@ function main()
     bench_stop(runner, "Tensor.transpose([32, 32])")
     tp.free()
 
+    # 9. Element-wise Addition (Int32 exact arithmetic)
+    let q1 = tensor::Tensor.ones([32, 32], 2)
+    let q2 = tensor::Tensor.ones([32, 32], 2)
+    let n_qadd = 5000
+    bench_start(runner, n_qadd)
+    let q_idx = 0
+    while q_idx < n_qadd
+        let res = q1.add(q2)
+        res.free()
+        q_idx += 1
+    end
+    bench_stop(runner, "Tensor.add Int32([32, 32])")
+    q1.free()
+    q2.free()
+
+    # 10. Broadcast addition [32, 1] + [1, 32]
+    let b1 = tensor::Tensor.ones([32, 1])
+    let b2 = tensor::Tensor.ones([1, 32])
+    let n_bcast = 2000
+    bench_start(runner, n_bcast)
+    let b_idx = 0
+    while b_idx < n_bcast
+        let res = b1.add(b2)
+        res.free()
+        b_idx += 1
+    end
+    bench_stop(runner, "Tensor.add broadcast([32, 1] + [1, 32])")
+    b1.free()
+    b2.free()
+
+    # 11. Device transfer staging [32, 32]
+    let x1 = tensor::Tensor.ones([32, 32])
+    let n_xfer = 2000
+    bench_start(runner, n_xfer)
+    let x_idx = 0
+    while x_idx < n_xfer
+        let res = x1.to(2)
+        res.free()
+        x_idx += 1
+    end
+    bench_stop(runner, "Tensor.to(GPU)([32, 32])")
+    x1.free()
+
     bench_summary(runner)
 end
 

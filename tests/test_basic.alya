@@ -237,6 +237,205 @@ function main()
     t_b.free()
 
     # ═══════════════════════════════════════════════════════════════
+    # 12. Storage Dtypes (Float32 / Int32 / Int64)
+    # ═══════════════════════════════════════════════════════════════
+    let ti = tensor::Tensor.from_array_int([2, 2], [4, 9, 2, 8], 2)
+    runner_assert_eq(r, ti.dtype, 2, "Int32 tensor carries dtype tag 2")
+    runner_assert_eq(r, ti.get_flat_int(0), 4, "Int32 get_flat_int reads exactly")
+    runner_assert_eq(r, ti.get_flat(1), 9.0, "Int32 get_flat converts to float")
+
+    let ti_b = tensor::Tensor.from_array_int([2, 2], [2, 3, 2, 4], 2)
+    let ti_add = ti.add(ti_b)
+    runner_assert_eq(r, ti_add.get_flat_int(0), 6, "Int32 add (0) == 4+2")
+    runner_assert_eq(r, ti_add.get_flat_int(3), 12, "Int32 add (3) == 8+4")
+    ti_add.free()
+    let ti_sub = ti.sub(ti_b)
+    runner_assert_eq(r, ti_sub.get_flat_int(1), 6, "Int32 sub (1) == 9-3")
+    ti_sub.free()
+    let ti_mul = ti.mul(ti_b)
+    runner_assert_eq(r, ti_mul.get_flat_int(1), 27, "Int32 mul (1) == 9*3")
+    ti_mul.free()
+    let ti_div = ti.div(ti_b)
+    runner_assert_eq(r, ti_div.get_flat_int(0), 2, "Int32 div (0) == 4/2")
+    runner_assert_eq(r, ti_div.get_flat_int(1), 3, "Int32 div (1) == 9/3")
+    ti_div.free()
+
+    runner_assert_eq(r, ti.sum(), 23.0, "Int32 sum() == 23")
+    runner_assert_eq(r, ti.mean(), 5.75, "Int32 mean() == 23/4")
+    runner_assert_eq(r, ti.min(), 2.0, "Int32 min() == 2.0")
+    runner_assert_eq(r, ti.max(), 9.0, "Int32 max() == 9.0")
+
+    let ti_scaled = ti.scale(3.0)
+    runner_assert_eq(r, ti_scaled.get_flat_int(2), 6, "Int32 scale(3.0) (2) == 2*3")
+    ti_scaled.free()
+
+    let mi_a = tensor::Tensor.from_array_int([2, 2], [1, 2, 3, 4], 2)
+    let mi_b = tensor::Tensor.from_array_int([2, 2], [5, 6, 7, 8], 2)
+    let mi_c = mi_a.matmul(mi_b)
+    runner_assert_eq(r, mi_c.get_flat_int(0), 19, "Int32 matmul (0,0) == 1*5+2*7")
+    runner_assert_eq(r, mi_c.get_flat_int(1), 22, "Int32 matmul (0,1) == 1*6+2*8")
+    runner_assert_eq(r, mi_c.get_flat_int(2), 43, "Int32 matmul (1,0) == 3*5+4*7")
+    runner_assert_eq(r, mi_c.get_flat_int(3), 50, "Int32 matmul (1,1) == 3*6+4*8")
+    mi_a.free()
+    mi_b.free()
+    mi_c.free()
+    ti_b.free()
+
+    let trunc = tensor::Tensor.from_array([2], [2.9, -2.9], 2)
+    runner_assert_eq(r, trunc.get_flat_int(0), 2, "float->int truncates toward zero")
+    runner_assert_eq(r, trunc.get_flat_int(1), -2, "negative float->int truncates toward zero")
+    trunc.free()
+
+    let big = tensor::Tensor.from_array_int([2], [9007199254740992, 8], 3)
+    runner_assert_eq(r, big.dtype, 3, "Int64 tensor carries dtype tag 3")
+    runner_assert_eq(r, big.get_flat_int(0), 9007199254740992, "Int64 reads exactly at 2^53")
+    runner_assert_eq(r, big.sum(), 9007199254741000.0, "Int64 sum() accumulates in integer arithmetic")
+    big.free()
+
+    let tf = tensor::Tensor.from_array([2, 2], [0.1, 0.2, 0.3, 0.4], 1)
+    runner_assert_eq(r, tf.dtype, 1, "Float32 tensor carries dtype tag 1")
+    runner_assert(r, tf.get_flat(0) > 0.0999999, "Float32 widening is near 0.1")
+    runner_assert(r, tf.get_flat(0) < 0.1000001, "Float32 widening is near 0.1")
+    let tf_add = tf.add(tf)
+    runner_assert(r, tf_add.get_flat(3) > 0.7999999, "Float32 add (3) near 0.8")
+    runner_assert(r, tf_add.get_flat(3) < 0.8000001, "Float32 add (3) near 0.8")
+    tf_add.free()
+    let tf_back = tf.to_dtype(0)
+    runner_assert_eq(r, tf_back.dtype, 0, "to_dtype() converts storage to Float64")
+    runner_assert(r, tf_back.get_flat(0) > 0.0999999, "to_dtype() preserves values")
+    tf_back.free()
+    tf.free()
+
+    let t_fmt_i = tensor::Tensor.from_array_int([3], [1, 2, 3], 2)
+    runner_assert_str_eq(r, t_fmt_i.to_string(), "[1, 2, 3]", "Int32 to_string() renders plain integers")
+    t_fmt_i.free()
+
+    let t_f64 = tensor::Tensor.ones([2, 2])
+    let t_i32 = tensor::Tensor.ones([2, 2], 2)
+    mismatch_caught = 0
+    try
+        let bad_dtype = t_f64.add(t_i32)
+        bad_dtype.free()
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "add() throws on dtype mismatch (no implicit promotion)")
+    runner_assert_true(r, t_f64.allclose(t_i32) == false, "allclose() returns false on dtype mismatch")
+    t_f64.free()
+
+    let zn = tensor::Tensor.from_array_int([2], [1, 2], 2)
+    let zd = tensor::Tensor.from_array_int([2], [1, 0], 2)
+    mismatch_caught = 0
+    try
+        let bad_zero = zn.div(zd)
+        bad_zero.free()
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "Int32 div() throws on zero divisor")
+    zn.free()
+    zd.free()
+    t_i32.free()
+    ti.free()
+
+    # ═══════════════════════════════════════════════════════════════
+    # 13. Broadcasting (implicit element-wise + explicit views)
+    # ═══════════════════════════════════════════════════════════════
+    let bc_a = tensor::Tensor.from_array([2, 1], [10.0, 20.0])
+    let bc_b = tensor::Tensor.from_array([1, 3], [1.0, 2.0, 3.0])
+    let bc_c = bc_a.add(bc_b)
+    runner_assert_eq(r, bc_c.shape[0], 2, "broadcast add rows == 2")
+    runner_assert_eq(r, bc_c.shape[1], 3, "broadcast add cols == 3")
+    runner_assert_eq(r, bc_c.get_2d(0, 0), 11.0, "broadcast add (0,0) == 10+1")
+    runner_assert_eq(r, bc_c.get_2d(0, 2), 13.0, "broadcast add (0,2) == 10+3")
+    runner_assert_eq(r, bc_c.get_2d(1, 0), 21.0, "broadcast add (1,0) == 20+1")
+    runner_assert_eq(r, bc_c.get_2d(1, 2), 23.0, "broadcast add (1,2) == 20+3")
+    bc_c.free()
+
+    let bc_m = bc_a.mul(bc_b)
+    runner_assert_eq(r, bc_m.get_2d(1, 2), 60.0, "broadcast mul (1,2) == 20*3")
+    bc_m.free()
+
+    let bc_scalar = tensor::Tensor.full([1], 5.0)
+    let bc_s = bc_a.add(bc_scalar)
+    runner_assert_eq(r, bc_s.get_2d(0, 0), 15.0, "scalar broadcast via [1] tensor (0,0)")
+    runner_assert_eq(r, bc_s.get_2d(1, 0), 25.0, "scalar broadcast via [1] tensor (1,0)")
+    bc_s.free()
+    bc_scalar.free()
+
+    let bc_i_a = tensor::Tensor.from_array_int([3, 1], [1, 2, 3], 2)
+    let bc_i_b = tensor::Tensor.from_array_int([1, 2], [10, 20], 2)
+    let bc_i_c = bc_i_a.add(bc_i_b)
+    runner_assert_eq(r, bc_i_c.shape[0], 3, "Int32 broadcast rows == 3")
+    runner_assert_eq(r, bc_i_c.shape[1], 2, "Int32 broadcast cols == 2")
+    runner_assert_eq(r, bc_i_c.get_flat_int(0), 11, "Int32 broadcast (0,0) == 1+10")
+    runner_assert_eq(r, bc_i_c.get_flat_int(5), 23, "Int32 broadcast (2,1) == 3+20")
+    bc_i_c.free()
+    bc_i_a.free()
+    bc_i_b.free()
+
+    let bc_v = bc_a.broadcast_to([2, 3])
+    runner_assert_eq(r, bc_v.shape[1], 3, "broadcast_to stretches trailing dim")
+    runner_assert_eq(r, bc_v.get_2d(1, 2), 20.0, "broadcast_to view reads stretched rows")
+    bc_a.set_2d(1, 0, 99.0)
+    runner_assert_eq(r, bc_v.get_2d(1, 2), 99.0, "broadcast_to view aliases the same buffer")
+    bc_a.set_2d(1, 0, 20.0)
+    bc_a.free()
+
+    let bc_x = tensor::Tensor.ones([2, 3])
+    let bc_y = tensor::Tensor.ones([2, 2])
+    mismatch_caught = 0
+    try
+        let bad_bc = bc_x.add(bc_y)
+        bad_bc.free()
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "add() throws on broadcast-incompatible shapes")
+    bc_x.free()
+    bc_y.free()
+    bc_b.free()
+
+    # ═══════════════════════════════════════════════════════════════
+    # 14. Device Placement (Phase 0: tagging + fallback)
+    # ═══════════════════════════════════════════════════════════════
+    let dev_cpu = tensor::Tensor.from_array([2, 2], [1.0, 2.0, 3.0, 4.0])
+    runner_assert_eq(r, dev_cpu.device_of(), 0, "fresh tensors are placed on CPU (0)")
+    runner_assert_eq(r, dev_cpu.device_of(), tensor::TensorDevice.CPU, "device_of() matches TensorDevice.CPU")
+
+    let dev_simd = dev_cpu.to(tensor::TensorDevice.SIMD)
+    runner_assert_eq(r, dev_simd.device_of(), 1, "to(SIMD) retags placement to 1")
+    runner_assert_eq(r, dev_simd.get_2d(1, 1), 4.0, "to() stages an exact value copy")
+    dev_simd.set_2d(0, 0, 99.0)
+    runner_assert_eq(r, dev_cpu.get_2d(0, 0), 1.0, "to() shares no buffer with the source")
+    dev_simd.free()
+
+    let dev_gpu = dev_cpu.to(tensor::TensorDevice.GPU)
+    runner_assert_eq(r, dev_gpu.device_of(), 2, "to(GPU) retags placement to 2")
+    runner_assert_true(r, tensor::device_has_accelerator() == false, "Phase 0 registers no accelerator backend")
+    runner_assert_true(r, dev_gpu.is_accelerated() == false, "GPU tensor honestly reports no acceleration")
+    runner_assert_true(r, dev_cpu.is_accelerated() == false, "CPU tensor is never accelerated")
+    let dev_sum = dev_gpu.add(dev_gpu)
+    runner_assert_eq(r, dev_sum.device_of(), 2, "ops preserve placement tags")
+    runner_assert_eq(r, dev_sum.get_2d(0, 0), 2.0, "GPU-tagged ops fall back to correct CPU numerics")
+    dev_sum.free()
+    tensor::synchronize()
+    dev_gpu.free()
+
+    let dev_cp = dev_cpu.copy()
+    runner_assert_eq(r, dev_cp.device_of(), 0, "copy() preserves placement")
+    dev_cp.free()
+
+    mismatch_caught = 0
+    try
+        let bad_dev = dev_cpu.to(7)
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "to() throws on unknown device tag")
+    dev_cpu.free()
+
+    # ═══════════════════════════════════════════════════════════════
     # 7. Data Models & Configuration (types.alya)
     # ═══════════════════════════════════════════════════════════════
     let cfg = tensor::new_config(tensor::TensorDevice.SIMD, 0, 4)
