@@ -940,6 +940,95 @@ function main()
         say "  [info] accelerator: " + tensor::device_name()
     end
 
+    # ═══════════════════════════════════════════════════════════════
+    # 22. Small Ops (dot, where, pad, flip, roll, tile, gather)
+    # ═══════════════════════════════════════════════════════════════
+    let dt_a = tensor::Tensor.from_array([3], [1.0, 2.0, 3.0])
+    let dt_b = tensor::Tensor.from_array([3], [4.0, 5.0, 6.0])
+    runner_assert_eq(r, dt_a.dot(dt_b), 32.0, "dot() == 1*4+2*5+3*6")
+    dt_a.free()
+    dt_b.free()
+    let dt_i_a = tensor::Tensor.from_array_int([3], [1, 2, 3], 2)
+    let dt_i_b = tensor::Tensor.from_array_int([3], [4, 5, 6], 2)
+    runner_assert_eq(r, dt_i_a.dot(dt_i_b), 32.0, "Int32 dot() exact")
+    dt_i_a.free()
+    dt_i_b.free()
+    mismatch_caught = 0
+    let dt_m1 = tensor::Tensor.from_array([2], [1.0, 2.0])
+    let dt_m2 = tensor::Tensor.from_array([3], [1.0, 2.0, 3.0])
+    try
+        let bad_dt = dt_m1.dot(dt_m2)
+        bad_dt.free()
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "dot() throws on size mismatch")
+    dt_m1.free()
+    dt_m2.free()
+
+    let wc = tensor::Tensor.from_array([4], [1.0, 0.0, 3.0, 0.0])
+    let wa = tensor::Tensor.from_array([4], [10.0, 20.0, 30.0, 40.0])
+    let wb = tensor::Tensor.from_array([4], [1.0, 2.0, 3.0, 4.0])
+    let ww = tensor::Tensor.where(wc, wa, wb)
+    runner_assert_eq(r, ww.get_flat(0), 10.0, "where() picks a on truthy")
+    runner_assert_eq(r, ww.get_flat(1), 2.0, "where() picks b on falsy")
+    runner_assert_eq(r, ww.get_flat(2), 30.0, "where() picks a on truthy tail")
+    ww.free()
+    wc.free()
+    wa.free()
+    wb.free()
+
+    let pd = tensor::Tensor.from_array([2, 2], [1.0, 2.0, 3.0, 4.0])
+    let pd_p = pd.pad(1, 0.0)
+    runner_assert_eq(r, pd_p.shape[0], 4, "pad() grows rows by 2")
+    runner_assert_eq(r, pd_p.shape[1], 4, "pad() grows cols by 2")
+    runner_assert_eq(r, pd_p.get_2d(0, 0), 0.0, "pad() border is fill value")
+    runner_assert_eq(r, pd_p.get_2d(1, 1), 1.0, "pad() interior (1,1) == orig (0,0)")
+    runner_assert_eq(r, pd_p.get_2d(2, 2), 4.0, "pad() interior (2,2) == orig (1,1)")
+    pd_p.free()
+
+    let fl = pd.flip(0)
+    runner_assert_eq(r, fl.get_2d(0, 0), 3.0, "flip(0) swaps rows")
+    runner_assert_eq(r, fl.get_2d(1, 1), 2.0, "flip(0) (1,1) == orig (0,1)")
+    fl.free()
+    let rl = pd.roll(1, 1)
+    runner_assert_eq(r, rl.get_2d(0, 0), 2.0, "roll(1,1) wraps last col front")
+    runner_assert_eq(r, rl.get_2d(0, 1), 1.0, "roll(1,1) shifts cols right")
+    rl.free()
+    let rl2 = pd.roll(-1, 0)
+    runner_assert_eq(r, rl2.get_2d(0, 0), 3.0, "roll(-1,0) shifts rows up")
+    rl2.free()
+
+    let tl = tensor::Tensor.from_array([2], [7.0, 8.0])
+    let tl_t = tl.tile([3])
+    runner_assert_eq(r, tl_t.shape[0], 6, "tile([3]) triples length")
+    runner_assert_eq(r, tl_t.get_flat(0), 7.0, "tile head == 7")
+    runner_assert_eq(r, tl_t.get_flat(2), 7.0, "tile repeats every 2")
+    runner_assert_eq(r, tl_t.get_flat(5), 8.0, "tile tail == 8")
+    tl_t.free()
+    tl.free()
+
+    let gt = tensor::Tensor.from_array([4], [10.0, 20.0, 30.0, 40.0])
+    let gi2 = tensor::Tensor.from_array_int([2], [3, 0], 2)
+    let gg = gt.gather(gi2)
+    runner_assert_eq(r, gg.shape[0], 2, "gather() length matches indices")
+    runner_assert_eq(r, gg.get_flat(0), 40.0, "gather()[0] == src[3]")
+    runner_assert_eq(r, gg.get_flat(1), 10.0, "gather()[1] == src[0]")
+    gg.free()
+    mismatch_caught = 0
+    let gi_bad = tensor::Tensor.from_array_int([1], [9], 2)
+    try
+        let gg_bad = gt.gather(gi_bad)
+        gg_bad.free()
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "gather() throws on out-of-range positions")
+    gi_bad.free()
+    gi2.free()
+    gt.free()
+    pd.free()
+
     let qa_src = tensor::Tensor.from_array([2, 2, 2], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
     let qa = qa_src.to(2)
     qa_src.free()

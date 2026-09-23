@@ -22,7 +22,8 @@ High-performance N-dimensional Tensor engine with hardware-accelerated SIMD GEMM
 - 🎛️ **Device Placement + OpenCL Offload**: Per-tensor `device_id` tagging (`CPU`/`SIMD`/`GPU`), explicit `to()` transfer staging, `synchronize()` barrier, and a portable OpenCL backend (`c/ocl.c`, runtime-loaded, no SDK) accelerating `add`/`mul`/`matmul` for `f32`/`i32`/`i64` (+ `f64` with `cl_khr_fp64`) with loud CPU fallback (see GPU roadmap below)
 - 🛡️ **Loud Shape Errors**: Element-wise mismatches and bad reshapes `throw` instead of silently producing garbage
 - 🔒 **Public/Private Visibility (`pub`)**: Strict encapsulation of memory internals and buffer pointers
-- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (322 assertions) and micro-benchmarks (18 kernels, incl. GPU-tagged offload)
+- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (346 assertions) and micro-benchmarks (18 kernels, incl. GPU-tagged offload)
+- 🔀 **Small Ops**: `dot`, `where`, `pad`, `flip`, `roll`, `tile`, `gather` (exact per dtype, loud bounds)
 - 🧮 **Element-Wise Math**: `neg`, `abs`, `sqrt`, `exp`, `ln`, `pow`, `clip` (exact integer paths where closed; direct native calls, immune to inference hazards)
 - 📉 **Extended Reductions**: `prod`, population `variance`/`std`, `argmin`/`argmax`
 - 📦 **Batched GEMM**: Rank-3+ `matmul` with broadcast batch dimensions (strided, view-consistent)
@@ -46,7 +47,7 @@ tensor/
 ├── examples/
 │   └── demo.alya           # Runnable showcase (GEMM, dtypes, broadcast, algebra, devices)
 ├── tests/
-│   └── test_basic.alya     # Automated test suite (322 assertions)
+│   └── test_basic.alya     # Automated test suite (346 assertions)
 └── benches/
     └── bench_basic.alya    # Micro-benchmarks (allocation, GEMM, reductions)
 ```
@@ -134,7 +135,17 @@ main()
 | `Tensor.diagonal(self)` | `pub method` | Extracts the main diagonal as a rank-1 copy. |
 | `Tensor.triu(self, k)` | `pub method` | Upper triangle (NumPy `k` offset semantics). |
 | `Tensor.tril(self, k)` | `pub method` | Lower triangle (NumPy `k` offset semantics). |
+| `Tensor.dot(self, other)` | `pub method` | Rank-1 dot product (exact per dtype). |
+| `Tensor.where(cond, a, b)` | `pub function` | Element-wise `cond != 0 ? a : b` (exact per dtype). |
+| `Tensor.pad(self, pad, value)` | `pub method` | Symmetric zero/constant border on every dimension. |
+| `Tensor.flip(self, dim)` | `pub method` | Reversal along one dimension. |
+| `Tensor.roll(self, shift, dim)` | `pub method` | Circular shift along one dimension. |
+| `Tensor.tile(self, reps)` | `pub method` | Per-dimension repetition. |
+| `Tensor.gather(self, indices)` | `pub method` | Flat take at integer positions. |
 | `Tensor.eye(n, dtype)` | `pub function` | Creates an n-by-n identity matrix. |
+| `Tensor.zeros_like(ref)` | `pub function` | Zero tensor matching reference shape/dtype/device. |
+| `Tensor.ones_like(ref)` | `pub function` | Ones tensor matching reference shape/dtype/device. |
+| `Tensor.full_like(ref, val)` | `pub function` | Filled tensor matching reference shape/dtype/device. |
 | `Tensor.copy(self)` | `pub method` | Deep copy with a freshly allocated buffer (no aliasing). |
 | `Tensor.to_dtype(self, dtype)` | `pub method` | Converts storage dtype (float-mediated; 2^53 caveat for Int64). |
 | `Tensor.fill(self, val)` | `pub method` | Overwrites every element in place. |
@@ -198,7 +209,7 @@ main()
 | `device_has_accelerator()` | `pub function` | Queries the native registry; `true` when an OpenCL device exists. |
 | `device_last_error()` | `pub function` | Last native backend error message (empty when healthy). |
 | `device_name()` | `pub function` | Human-readable accelerator device name (empty without a backend). |
-| `synchronize()` | `pub function` | Ordering barrier for device streams (documented no-op while execution is synchronous). |
+| `synchronize()` | `pub function` | Drains in-flight launch events (real fence; no-op without a backend). |
 
 > [!NOTE]
 > **Storage model:** buffers hold native-width elements (`Float64` default, `Float32`, `Int32`, `Int64` via `std/mem` narrow accessors). There is no implicit cross-dtype promotion: element-wise kernels require identical dtypes and `throw` on mismatch — convert explicitly with `to_dtype`. Value parameters are explicitly `float`, so pass `2.0`, not `2` (whole-program inference compiles each call site by its static type); integer element arrays go through `from_array_int` / `set_flat_int`. `get_flat` converts integer storage to float (exact below 2^53); use `get_flat_int` beyond that. Element-wise shape mismatches and bad reshapes `throw` instead of silently producing garbage.
@@ -217,7 +228,7 @@ Phase 1 (shipped): GPU-tagged `add`/`mul`/`matmul` offload to a portable OpenCL 
 | CPU-fallback numerics for device-tagged tensors | ✅ Shipped | Placement preserved through ops, values exact |
 | Metal backend (macOS) | ⬜ Open | Needs display-machine + `c/device_metal.m` behind `c-sources-macos` |
 | CUDA backend (Windows/Linux) | ⬜ Open | Needs CUDA toolkit + `c/device_cuda.c` behind per-OS sources |
-| Async streams (`synchronize` becomes a real fence) | ⬜ Open | Needs `sy::spawn` worker-thread queue in `device.alya` |
+| Async event fence (non-blocking launches + `synchronize` drain) | ✅ Shipped | In-order queue + blocking reads keep it correct; 64-event ring |
 
 ---
 

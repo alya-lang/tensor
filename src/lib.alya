@@ -1331,6 +1331,112 @@ function matmul_int_into(a: Tensor, b: Tensor, res: Tensor, m: int, n: int, k: i
     return res
 end
 
+## Computes the dot product of two rank-1 tensors (exact per dtype).
+##
+## Integer storage accumulates exactly (overflow wraps, C-style).
+##
+## ### Parameters
+## - `self`: Rank-1 `Tensor` instance.
+## - `other`: Rank-1 `Tensor` with matching size and dtype.
+##
+## ### Returns
+## The scalar dot product (float; integer-exact below 2^53).
+##
+## ### Throws
+## Non-rank-1 input, size mismatch, or dtype mismatch.
+pub function Tensor.dot(self: Tensor, other: Tensor) -> float
+    if len(self.shape) != 1 or len(other.shape) != 1
+        throw "Tensor.dot requires rank-1 tensors"
+    end
+    assert_same_shape(self, other)
+    assert_same_dtype(self, other)
+    if dtype_is_int(self.dtype)
+        let acc = 0
+        let i: int = 0
+        while i < self.size
+            acc += self.get_flat_int(i) * other.get_flat_int(i)
+            i += 1
+        end
+        return acc + 0.0
+    end
+    let total: float = 0.0
+    let j: int = 0
+    while j < self.size
+        total += self.get_flat(j) * other.get_flat(j)
+        j += 1
+    end
+    return total
+end
+
+## Element-wise selection: `cond[i] != 0 ? a[i] : b[i]` (exact per dtype).
+##
+## `a` and `b` require identical shapes and dtypes; `cond` requires the
+## same shape but any dtype (nonzero = true, exact per its own dtype).
+##
+## ### Parameters
+## - `cond`: Condition `Tensor` (same shape as `a`/`b`).
+## - `a`: Value tensor for truthy elements.
+## - `b`: Value tensor for falsy elements.
+##
+## ### Returns
+## A new `Tensor` with `a`'s shape and dtype.
+##
+## ### Throws
+## Shape mismatch, or `a`/`b` dtype mismatch.
+pub function Tensor.where(cond: Tensor, a: Tensor, b: Tensor) -> Tensor
+    assert_same_shape(cond, a)
+    assert_same_shape(a, b)
+    assert_same_dtype(a, b)
+    let res = Tensor.new(a.shape, a.dtype, a.device_id)
+    let total: int = a.size
+    let cond_int: int = 0
+    if dtype_is_int(cond.dtype)
+        cond_int = 1
+    end
+    if dtype_is_int(a.dtype)
+        let i: int = 0
+        while i < total
+            let take_a: int = 0
+            if cond_int == 1
+                if cond.get_flat_int(i) != 0
+                    take_a = 1
+                end
+            else
+                if cond.get_flat(i) != 0.0
+                    take_a = 1
+                end
+            end
+            if take_a == 1
+                res.set_flat_int(i, a.get_flat_int(i))
+            else
+                res.set_flat_int(i, b.get_flat_int(i))
+            end
+            i += 1
+        end
+        return res
+    end
+    let j: int = 0
+    while j < total
+        let take_af: int = 0
+        if cond_int == 1
+            if cond.get_flat_int(j) != 0
+                take_af = 1
+            end
+        else
+            if cond.get_flat(j) != 0.0
+                take_af = 1
+            end
+        end
+        if take_af == 1
+            res.set_flat(j, a.get_flat(j))
+        else
+            res.set_flat(j, b.get_flat(j))
+        end
+        j += 1
+    end
+    return res
+end
+
 ## Element-wise addition with NumPy-style broadcasting (4-wide unrolled).
 ##
 ## Shapes broadcast right-aligned (size-1 dimensions stretch); incompatible
@@ -2724,6 +2830,269 @@ pub function Tensor.split(self: Tensor, parts: int, dim: int) -> array
         p += 1
     end
     return out
+end
+
+## Returns a copy padded with `pad` elements of `value` on every dimension.
+##
+## Each dimension grows by `2 * pad` (symmetric); per-axis pads are a
+## follow-up.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `pad`: Padding width per side (non-negative).
+## - `value`: Fill value (converts to storage dtype).
+##
+## ### Returns
+## A new contiguous padded `Tensor`.
+##
+## ### Throws
+## Negative pad width.
+pub function Tensor.pad(self: Tensor, pad: int, value: float) -> Tensor
+    if pad < 0
+        throw "Tensor.pad requires a non-negative width"
+    end
+    let rank: int = len(self.shape)
+    let new_shape = []
+    let i: int = 0
+    while i < rank
+        new_shape.push(self.shape[i] + pad * 2)
+        i += 1
+    end
+    let res = Tensor.new(new_shape, self.dtype, self.device_id)
+    res.fill(value)
+    let total: int = self.size
+    let is_int: int = 0
+    if dtype_is_int(self.dtype)
+        is_int = 1
+    end
+    let f: int = 0
+    while f < total
+        let rem: int = f
+        let src_idx: int = 0
+        let dst_idx: int = 0
+        let d: int = rank - 1
+        while d >= 0
+            let dim: int = self.shape[d]
+            let coord: int = rem % dim
+            rem = (rem - coord) / dim
+            src_idx += coord * self.strides[d]
+            dst_idx += (coord + pad) * res.strides[d]
+            d -= 1
+        end
+        if is_int == 1
+            res.set_flat_int(dst_idx, self.get_flat_int(src_idx))
+        else
+            res.set_flat(dst_idx, self.get_flat(src_idx))
+        end
+        f += 1
+    end
+    return res
+end
+
+## Returns a copy reversed along `dim`.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `dim`: Dimension to reverse.
+##
+## ### Returns
+## A new contiguous `Tensor`.
+##
+## ### Throws
+## Out-of-range `dim`.
+pub function Tensor.flip(self: Tensor, dim: int) -> Tensor
+    let rank: int = len(self.shape)
+    if dim < 0 or dim >= rank
+        throw "Tensor.flip dim out of range"
+    end
+    let res = Tensor.new(self.shape, self.dtype, self.device_id)
+    let total: int = self.size
+    let is_int: int = 0
+    if dtype_is_int(self.dtype)
+        is_int = 1
+    end
+    let f: int = 0
+    while f < total
+        let rem: int = f
+        let src_idx: int = 0
+        let d: int = rank - 1
+        while d >= 0
+            let dd: int = self.shape[d]
+            let coord: int = rem % dd
+            rem = (rem - coord) / dd
+            if d == dim
+                coord = dd - 1 - coord
+            end
+            src_idx += coord * self.strides[d]
+            d -= 1
+        end
+        if is_int == 1
+            res.set_flat_int(f, self.get_flat_int(src_idx))
+        else
+            res.set_flat(f, self.get_flat(src_idx))
+        end
+        f += 1
+    end
+    return res
+end
+
+## Returns a copy circularly shifted by `shift` along `dim`.
+##
+## Positive shifts move elements toward higher indices with wraparound;
+## any integer shift works (normalized modulo the extent).
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `shift`: Circular shift amount.
+## - `dim`: Dimension to shift along.
+##
+## ### Returns
+## A new contiguous `Tensor`.
+##
+## ### Throws
+## Out-of-range `dim`, or empty extent along `dim`.
+pub function Tensor.roll(self: Tensor, shift: int, dim: int) -> Tensor
+    let rank: int = len(self.shape)
+    if dim < 0 or dim >= rank
+        throw "Tensor.roll dim out of range"
+    end
+    let extent: int = self.shape[dim]
+    if extent <= 0
+        throw "Tensor.roll requires a non-empty extent"
+    end
+    let norm: int = (shift % extent + extent) % extent
+    let res = Tensor.new(self.shape, self.dtype, self.device_id)
+    let total: int = self.size
+    let is_int: int = 0
+    if dtype_is_int(self.dtype)
+        is_int = 1
+    end
+    let f: int = 0
+    while f < total
+        let rem: int = f
+        let src_idx: int = 0
+        let d: int = rank - 1
+        while d >= 0
+            let dd: int = self.shape[d]
+            let coord: int = rem % dd
+            rem = (rem - coord) / dd
+            if d == dim
+                coord = coord - norm
+                if coord < 0
+                    coord += extent
+                end
+            end
+            src_idx += coord * self.strides[d]
+            d -= 1
+        end
+        if is_int == 1
+            res.set_flat_int(f, self.get_flat_int(src_idx))
+        else
+            res.set_flat(f, self.get_flat(src_idx))
+        end
+        f += 1
+    end
+    return res
+end
+
+## Returns a contiguous copy tiled `reps[d]` times along each dimension.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `reps`: Per-dimension repeat counts (length must equal rank, all positive).
+##
+## ### Returns
+## A new contiguous tiled `Tensor`.
+##
+## ### Throws
+## Length mismatch, or non-positive repeat counts.
+pub function Tensor.tile(self: Tensor, reps: array) -> Tensor
+    let rank: int = len(self.shape)
+    if len(reps) != rank
+        throw "Tensor.tile reps length must equal tensor rank"
+    end
+    let new_shape = []
+    let i: int = 0
+    while i < rank
+        let r: int = reps[i]
+        if r <= 0
+            throw "Tensor.tile requires positive repeat counts"
+        end
+        new_shape.push(self.shape[i] * r)
+        i += 1
+    end
+    let res = Tensor.new(new_shape, self.dtype, self.device_id)
+    let total: int = res.size
+    let is_int: int = 0
+    if dtype_is_int(self.dtype)
+        is_int = 1
+    end
+    let f: int = 0
+    while f < total
+        let rem: int = f
+        let src_idx: int = 0
+        let d: int = rank - 1
+        while d >= 0
+            let dd: int = new_shape[d]
+            let coord: int = rem % dd
+            rem = (rem - coord) / dd
+            src_idx += (coord % self.shape[d]) * self.strides[d]
+            d -= 1
+        end
+        if is_int == 1
+            res.set_flat_int(f, self.get_flat_int(src_idx))
+        else
+            res.set_flat(f, self.get_flat(src_idx))
+        end
+        f += 1
+    end
+    return res
+end
+
+## Gathers flat elements at integer positions into a rank-1 tensor.
+##
+## Out-of-range positions throw (no wraparound).
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `indices`: Rank-1 integer-dtype position tensor.
+##
+## ### Returns
+## A new 1D `Tensor` with the gathered values.
+##
+## ### Throws
+## Non-rank-1 or non-integer `indices`, or out-of-range positions.
+pub function Tensor.gather(self: Tensor, indices: Tensor) -> Tensor
+    if len(indices.shape) != 1
+        throw "Tensor.gather requires rank-1 indices"
+    end
+    if dtype_is_int(indices.dtype) == false
+        throw "Tensor.gather requires integer indices"
+    end
+    let n: int = indices.size
+    let res = Tensor.new([n], self.dtype, self.device_id)
+    if dtype_is_int(self.dtype)
+        let i: int = 0
+        while i < n
+            let pos: int = indices.get_flat_int(i)
+            if pos < 0 or pos >= self.size
+                throw "Tensor.gather position out of range"
+            end
+            res.set_flat_int(i, self.get_flat_int(pos))
+            i += 1
+        end
+        return res
+    end
+    let j: int = 0
+    while j < n
+        let q: int = indices.get_flat_int(j)
+        if q < 0 or q >= self.size
+            throw "Tensor.gather position out of range"
+        end
+        res.set_flat(j, self.get_flat(q))
+        j += 1
+    end
+    return res
 end
 
 ## Converts all tensor elements to a standard flat Alya float array.

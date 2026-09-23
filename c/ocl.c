@@ -92,6 +92,8 @@ typedef cl_int (*fn_clEnqueueWriteBuffer)(cl_command_queue, cl_mem, cl_bool, siz
 typedef cl_int (*fn_clEnqueueReadBuffer)(cl_command_queue, cl_mem, cl_bool, size_t, size_t, void *, cl_uint, const void *, void *);
 typedef cl_int (*fn_clEnqueueNDRangeKernel)(cl_command_queue, cl_kernel, cl_uint, const size_t *, const size_t *, const size_t *, cl_uint, const void *, void *);
 typedef cl_int (*fn_clFinish)(cl_command_queue);
+typedef cl_int (*fn_clWaitForEvents)(cl_uint, const void *);
+typedef cl_int (*fn_clReleaseEvent)(void *);
 typedef cl_int (*fn_clReleaseMemObject)(cl_mem);
 typedef cl_int (*fn_clReleaseKernel)(cl_kernel);
 typedef cl_int (*fn_clReleaseProgram)(cl_program);
@@ -113,6 +115,8 @@ static fn_clEnqueueWriteBuffer p_clEnqueueWriteBuffer = 0;
 static fn_clEnqueueReadBuffer p_clEnqueueReadBuffer = 0;
 static fn_clEnqueueNDRangeKernel p_clEnqueueNDRangeKernel = 0;
 static fn_clFinish p_clFinish = 0;
+static fn_clWaitForEvents p_clWaitForEvents = 0;
+static fn_clReleaseEvent p_clReleaseEvent = 0;
 static fn_clReleaseMemObject p_clReleaseMemObject = 0;
 static fn_clReleaseKernel p_clReleaseKernel = 0;
 static fn_clReleaseProgram p_clReleaseProgram = 0;
@@ -266,6 +270,29 @@ static cl_kernel ocl_kernels[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static char ocl_error[2048] = {0};
 static char ocl_dev_name[256] = {0};
 
+// In-flight launch events for the async fence. Launches enqueue without
+// blocking; the in-order queue preserves submission order and blocking
+// reads serve as implicit barriers, so `sync` only needs to drain.
+#define OCL_MAX_EVENTS 64
+static void *ocl_events[OCL_MAX_EVENTS] = {0};
+static int ocl_event_count = 0;
+
+static void ocl_track(void *ev) {
+    int i = 0;
+    if (!ev) return;
+    if (ocl_event_count >= OCL_MAX_EVENTS) {
+        // Ring full: drain before tracking more (preserves correctness,
+        // keeps memory bounded).
+        p_clFinish(ocl_queue);
+        for (i = 0; i < ocl_event_count; ++i) {
+            p_clReleaseEvent(ocl_events[i]);
+            ocl_events[i] = 0;
+        }
+        ocl_event_count = 0;
+    }
+    ocl_events[ocl_event_count++] = ev;
+}
+
 static void ocl_trace(const char *what) {
     const char *on = getenv("ALYA_TENSOR_OCL_DEBUG");
     if (on && on[0]) {
@@ -297,6 +324,8 @@ static int ocl_load_api(void) {
     OCL_WANT(clEnqueueReadBuffer);
     OCL_WANT(clEnqueueNDRangeKernel);
     OCL_WANT(clFinish);
+    OCL_WANT(clWaitForEvents);
+    OCL_WANT(clReleaseEvent);
     OCL_WANT(clReleaseMemObject);
     OCL_WANT(clReleaseKernel);
     OCL_WANT(clReleaseProgram);
@@ -512,8 +541,11 @@ static int32_t ocl_launch_ew(void *ah, void *bh, void *oh, int32_t count, int op
     if (p_clSetKernelArg(k, 2, sizeof(void *), &oh) != CL_SUCCESS) return 0;
     if (p_clSetKernelArg(k, 3, sizeof(int32_t), &count) != CL_SUCCESS) return 0;
     global = (size_t)count;
-    if (p_clEnqueueNDRangeKernel(ocl_queue, k, 1, 0, &global, 0, 0, 0, 0) != CL_SUCCESS) return 0;
-    if (p_clFinish(ocl_queue) != CL_SUCCESS) return 0;
+    {
+        void *ev = 0;
+        if (p_clEnqueueNDRangeKernel(ocl_queue, k, 1, 0, &global, 0, 0, 0, &ev) != CL_SUCCESS) return 0;
+        ocl_track(ev);
+    }
     ocl_trace("element-wise launch ok");
     return 1;
 }
@@ -553,9 +585,31 @@ int32_t alya_tensor_ocl_matmul(void *ah, void *bh, void *oh, int32_t a_off, int3
         rounded[1] = ((size_t)m + 15) / 16 * 16;
         local[0] = 16;
         local[1] = 16;
-        if (p_clEnqueueNDRangeKernel(ocl_queue, kr, 2, 0, rounded, local, 0, 0, 0) != CL_SUCCESS) return 0;
+        {
+            void *ev = 0;
+            if (p_clEnqueueNDRangeKernel(ocl_queue, kr, 2, 0, rounded, local, 0, 0, &ev) != CL_SUCCESS) return 0;
+            ocl_track(ev);
+        }
     }
-    if (p_clFinish(ocl_queue) != CL_SUCCESS) return 0;
     ocl_trace("matmul launch ok");
     return 1;
+}
+
+int32_t alya_tensor_ocl_sync(void) {
+    int i = 0;
+    int ok = 1;
+    ocl_init();
+    if (ocl_state != 1) return 0;
+    if (ocl_event_count > 0) {
+        if (p_clWaitForEvents((cl_uint)ocl_event_count, (const void *)ocl_events) != CL_SUCCESS) {
+            ok = 0;
+        }
+        for (i = 0; i < ocl_event_count; ++i) {
+            p_clReleaseEvent(ocl_events[i]);
+            ocl_events[i] = 0;
+        }
+        ocl_event_count = 0;
+    }
+    if (p_clFinish(ocl_queue) != CL_SUCCESS) ok = 0;
+    return (int32_t)ok;
 }
