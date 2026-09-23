@@ -14,7 +14,7 @@ keywords = ["alya", "alya-lang", "package", "tensor", "simd", "matrix", "math", 
 
 [build]
 links = "tensor"
-c-sources = ["c/device.c"]
+c-sources = ["c/device.c", "c/ocl.c"]
 c-flags = ["-O2"]
 c-include-dirs = ["c"]
 

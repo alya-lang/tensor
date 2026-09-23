@@ -50,6 +50,13 @@ jobs:
         run: |
           alya install
 
+      - name: Install Portable OpenCL (Linux CPU device)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pocl-opencl-icd ocl-icd-libopencl1
+          ls /etc/OpenCL/vendors/
+
       - name: Run package test suite
         run: |
           alya test

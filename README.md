@@ -19,10 +19,10 @@ High-performance N-dimensional Tensor engine with hardware-accelerated SIMD GEMM
 - 🔄 **Zero-Copy Reshaping**: Stride-aware multidimensional views (`reshape`, `flatten`, `to_array`, `to_string` with 2D matrix rendering)
 - 🔁 **Shape Algebra**: Contiguous `transpose`, deep `copy`, `full`/`eye` constructors, in-place `fill`, and `allclose` tolerance comparison
 - 📡 **NumPy-Style Broadcasting**: Implicit right-aligned stretching in `add`/`sub`/`mul`/`div` (size-1 dimensions stretch, incompatible shapes throw), explicit zero-copy `broadcast_to` views, and `broadcast_shape` shape algebra
-- 🎛️ **Device Placement (Phase 0)**: Per-tensor `device_id` tagging (`CPU`/`SIMD`/`GPU`), explicit `to()` transfer staging, `synchronize()` barrier, and a native accelerator registry (`c/device.c`) — no backend registered yet, so compute honestly falls back to CPU/SIMD (see GPU roadmap below)
+- 🎛️ **Device Placement + OpenCL Offload**: Per-tensor `device_id` tagging (`CPU`/`SIMD`/`GPU`), explicit `to()` transfer staging, `synchronize()` barrier, and a portable OpenCL backend (`c/ocl.c`, runtime-loaded, no SDK) accelerating `add`/`mul`/`matmul` for `f32`/`i32`/`i64` (+ `f64` with `cl_khr_fp64`) with loud CPU fallback (see GPU roadmap below)
 - 🛡️ **Loud Shape Errors**: Element-wise mismatches and bad reshapes `throw` instead of silently producing garbage
 - 🔒 **Public/Private Visibility (`pub`)**: Strict encapsulation of memory internals and buffer pointers
-- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (301 assertions) and micro-benchmarks
+- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (321 assertions) and micro-benchmarks (18 kernels, incl. GPU-tagged offload)
 - 🧮 **Element-Wise Math**: `neg`, `abs`, `sqrt`, `exp`, `ln`, `pow`, `clip` (exact integer paths where closed; direct native calls, immune to inference hazards)
 - 📉 **Extended Reductions**: `prod`, population `variance`/`std`, `argmin`/`argmax`
 - 📦 **Batched GEMM**: Rank-3+ `matmul` with broadcast batch dimensions (strided, view-consistent)
@@ -41,11 +41,12 @@ tensor/
 │       ├── formatter.alya  # Vector & matrix string representation logic
 │       └── device.alya     # Device placement API + native registry FFI (Phase 0)
 ├── c/
-│   └── device.c            # Accelerator registry (no backend registered yet)
+│   ├── device.c            # Accelerator registry (delegates to OpenCL discovery)
+│   └── ocl.c               # Portable OpenCL backend (dynamic load, 12 kernels)
 ├── examples/
 │   └── demo.alya           # Runnable showcase (GEMM, dtypes, broadcast, algebra, devices)
 ├── tests/
-│   └── test_basic.alya     # Automated test suite (301 assertions)
+│   └── test_basic.alya     # Automated test suite (321 assertions)
 └── benches/
     └── bench_basic.alya    # Micro-benchmarks (allocation, GEMM, reductions)
 ```
@@ -194,7 +195,8 @@ main()
 | `Tensor.to(self, device)` | `pub method` | Exact staged copy placed on another device (shares nothing with the source). |
 | `Tensor.device_of(self)` | `pub method` | Returns the placement tag (`0` = CPU, `1` = SIMD, `2` = GPU). |
 | `Tensor.is_accelerated(self)` | `pub method` | `true` only for GPU-placed tensors on machines with a registered backend. |
-| `device_has_accelerator()` | `pub function` | Queries the native registry; `false` until a platform backend registers. |
+| `device_has_accelerator()` | `pub function` | Queries the native registry; `true` when an OpenCL device exists. |
+| `device_last_error()` | `pub function` | Last native backend error message (empty when healthy). |
 | `synchronize()` | `pub function` | Ordering barrier for device streams (documented no-op while execution is synchronous). |
 
 > [!NOTE]
@@ -204,16 +206,16 @@ main()
 
 ## 🎛️ Device Execution & GPU Roadmap
 
-Phase 0 (shipped): the placement API is fully wired — `device_id` tagging, `to()` staging copies, `synchronize()` barrier, and the native registry (`c/device.c`, linked via `[build] c-sources`). The registry reports **0 accelerators on every OS**, so compute runs the CPU/SIMD kernels. That fallback is deliberate and tested (`is_accelerated() == false`), never a silent fake GPU — code written against `to()` today runs unchanged when backends land.
+Phase 1 (shipped): GPU-tagged `add`/`mul`/`matmul` offload to a portable OpenCL backend (`c/ocl.c`, runtime-loaded via `LoadLibrary`/`dlopen` — no SDK, no link flags). `f32`/`i32`/`i64` are OpenCL C core; `f64` compiles in only with `cl_khr_fp64` (queried per device). Anything unsupported — no platform, missing extension, oversized transfer, non-contiguous views, mixed placement — returns `false` through the dispatch layer and runs the CPU/SIMD kernels with placement preserved. GPU devices are preferred; CPU OpenCL devices (e.g. `pocl`, installed on Linux CI) count too, so the native path executes in CI. Set `ALYA_TENSOR_OCL_DEBUG=1` for stderr launch tracing.
 
 | Step | Status | Notes |
 |---|---|---|
-| Placement API (`to`, `device_of`, `synchronize`) | ✅ Shipped | Tested (§14), 146 assertions green |
-| Native registry + FFI path (`c/device.c`) | ✅ Shipped | Compiles/links on all OSes via `[build]`; returns honest 0 |
+| Placement API (`to`, `device_of`, `synchronize`) | ✅ Shipped | Tested (§14), green with and without a backend |
+| Native registry + FFI path (`c/device.c`) | ✅ Shipped | Compiles/links on all OSes via `[build]` |
+| OpenCL offload (`add`/`mul`/`matmul`, 4 dtypes) | ✅ Shipped | Tested (§21: 2D, batched, mixed-device fallback); verified on Intel UHD + `pocl` CI |
 | CPU-fallback numerics for device-tagged tensors | ✅ Shipped | Placement preserved through ops, values exact |
 | Metal backend (macOS) | ⬜ Open | Needs display-machine + `c/device_metal.m` behind `c-sources-macos` |
 | CUDA backend (Windows/Linux) | ⬜ Open | Needs CUDA toolkit + `c/device_cuda.c` behind per-OS sources |
-| OpenCL fallback backend | ⬜ Open | Portable fallback once the registry protocol grows kernel entries |
 | Async streams (`synchronize` becomes a real fence) | ⬜ Open | Needs `sy::spawn` worker-thread queue in `device.alya` |
 
 ---

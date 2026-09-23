@@ -239,6 +239,25 @@ function main()
     w1.free()
     remove_file(wpath)
 
+    # 18. GPU-tagged addition [32, 32] (native offload or CPU fallback)
+    let g1s = tensor::Tensor.ones([32, 32])
+    let g1 = g1s.to(2)
+    g1s.free()
+    let g2s = tensor::Tensor.ones([32, 32])
+    let g2 = g2s.to(2)
+    g2s.free()
+    let n_gpu = 2000
+    bench_start(runner, n_gpu)
+    let gpu_idx = 0
+    while gpu_idx < n_gpu
+        let res = g1.add(g2)
+        res.free()
+        gpu_idx += 1
+    end
+    bench_stop(runner, "Tensor.add GPU-tagged([32, 32])")
+    g1.free()
+    g2.free()
+
     bench_summary(runner)
 end
 

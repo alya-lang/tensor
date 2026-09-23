@@ -1,24 +1,37 @@
-## Tensor device execution (Phase 0: abstraction + fallback)
+## Tensor device execution (Phase 1: OpenCL offload + fallback)
 ##
 ## Part of the Alya Language package ecosystem (https://github.com/alya-lang).
 ##
-## Device placement API for tensor compute offload. The Alya side is fully
-## wired: tensors carry a `device_id`, `to()` stages explicit transfers,
-## and `device_has_accelerator()` queries the native registry in
-## `c/device.c`. No platform kernel is registered yet (count is 0 on every
-## OS), so compute always runs the CPU/SIMD kernels — loudly documented,
-## never a silent fake GPU. Platform backends (Metal / CUDA / OpenCL)
-## plug into the registry without changing user code.
+## Device placement API for tensor compute offload. Tensors carry a
+## `device_id`; `device_has_accelerator()` queries the native registry
+## (`c/device.c` backed by the portable OpenCL backend in `c/ocl.c`, which
+## loads the system OpenCL library at runtime with no SDK dependency).
+## Element-wise add/mul and GEMM offload through `device_offload_*` when
+## the operands are GPU-tagged and the dtype is supported; anything else
+## (no platform, unsupported dtype, oversized transfer) returns `false`
+## and the caller runs the CPU/SIMD kernels. `i32` transfer sizes cap a
+## single staging copy at 2GB.
+
+import "../types.alya"
 
 extern "C"
     function alya_tensor_device_count() -> i32
+    function alya_tensor_device_supports(dtype: i32) -> i32
+    function alya_tensor_ocl_error() -> str
+    function alya_tensor_ocl_alloc(byte_size: i32) -> ptr
+    function alya_tensor_ocl_free(handle: ptr) -> void
+    function alya_tensor_ocl_write(handle: ptr, host: ptr, byte_size: i32) -> i32
+    function alya_tensor_ocl_read(handle: ptr, host: ptr, byte_size: i32) -> i32
+    function alya_tensor_ocl_add(a: ptr, b: ptr, out: ptr, count: i32, dtype: i32) -> i32
+    function alya_tensor_ocl_mul(a: ptr, b: ptr, out: ptr, count: i32, dtype: i32) -> i32
+    function alya_tensor_ocl_matmul(a: ptr, b: ptr, out: ptr, a_off: i32, b_off: i32, r_off: i32, m: i32, n: i32, k: i32, dtype: i32) -> i32
 end
 
 ## Reports whether any accelerator device is usable on this machine.
 ##
-## Queries the native registry (`c/device.c`). Returns `false` everywhere
-## until a platform backend registers; code can branch on it to pick
-## transfer strategies.
+## Queries the native registry (`c/device.c`). OpenCL GPU devices are
+## preferred; CPU OpenCL devices (e.g. pocl) count as well so the offload
+## path stays verifiable without discrete hardware.
 ##
 ## ### Returns
 ## `true` when at least one accelerator device is available.
@@ -29,10 +42,170 @@ pub function device_has_accelerator() -> bool
     return false
 end
 
+## Returns the last native backend error message (empty when healthy).
+##
+## ### Returns
+## Human-readable backend status string.
+pub function device_last_error() -> string
+    return alya_tensor_ocl_error()
+end
+
 ## Global ordering barrier for device streams.
 ##
-## Phase 0 execution is synchronous, so this is a documented no-op.
-## Forward-compatible code calls it after enqueueing device work; once
-## async backends land, it becomes the fence without API changes.
+## Execution is synchronous (`clFinish` per launch), so this is a
+## documented no-op. Forward-compatible code calls it after enqueueing
+## device work; once async backends land, it becomes the fence without
+## API changes.
 pub function synchronize()
+end
+
+## Offloads one element-wise add/mul of `count` contiguous elements.
+##
+## Called cross-module from `src/lib.alya` (hence `pub`); see that module
+## for the contract. Returns `false` (caller runs CPU kernels) unless both
+## operands are GPU-tagged, the dtype is backend-supported, and the whole
+## alloc/write/launch/read cycle succeeds. Staging buffers are always
+## released, including on mid-cycle failure.
+pub function device_offload_ew(a: Tensor, b: Tensor, res: Tensor, count: int, is_mul: int) -> bool
+    if a.device_id != 2 or b.device_id != 2
+        return false
+    end
+    if count <= 0
+        return false
+    end
+    let itemsize: int = 8
+    if a.dtype == 1 or a.dtype == 2
+        itemsize = 4
+    end
+    let bytes: int = count * itemsize
+    if bytes > 2147483647
+        return false
+    end
+    if alya_tensor_device_supports(a.dtype) == 0
+        return false
+    end
+    let ha = alya_tensor_ocl_alloc(bytes)
+    if ha == 0
+        return false
+    end
+    let hb = alya_tensor_ocl_alloc(bytes)
+    if hb == 0
+        alya_tensor_ocl_free(ha)
+        return false
+    end
+    let ho = alya_tensor_ocl_alloc(bytes)
+    if ho == 0
+        alya_tensor_ocl_free(ha)
+        alya_tensor_ocl_free(hb)
+        return false
+    end
+    if alya_tensor_ocl_write(ha, a.data, bytes) == 0
+        alya_tensor_ocl_free(ha)
+        alya_tensor_ocl_free(hb)
+        alya_tensor_ocl_free(ho)
+        return false
+    end
+    if alya_tensor_ocl_write(hb, b.data, bytes) == 0
+        alya_tensor_ocl_free(ha)
+        alya_tensor_ocl_free(hb)
+        alya_tensor_ocl_free(ho)
+        return false
+    end
+    let launched: int = 0
+    if is_mul == 1
+        launched = alya_tensor_ocl_mul(ha, hb, ho, count, a.dtype)
+    else
+        launched = alya_tensor_ocl_add(ha, hb, ho, count, a.dtype)
+    end
+    if launched == 0
+        alya_tensor_ocl_free(ha)
+        alya_tensor_ocl_free(hb)
+        alya_tensor_ocl_free(ho)
+        return false
+    end
+    if alya_tensor_ocl_read(ho, res.data, bytes) == 0
+        alya_tensor_ocl_free(ha)
+        alya_tensor_ocl_free(hb)
+        alya_tensor_ocl_free(ho)
+        return false
+    end
+    alya_tensor_ocl_free(ha)
+    alya_tensor_ocl_free(hb)
+    alya_tensor_ocl_free(ho)
+    return true
+end
+
+## Offloads one contiguous 2D product (`M x K` by `K x N`) at element bases.
+##
+## Called cross-module from `src/lib.alya` (hence `pub`).
+## Same `false`-means-CPU contract as `device_offload_ew`. Host slices
+## start at `a_data + a_base` (pointer arithmetic) while the device
+## buffers hold exactly one batch, so kernel offsets stay zero; the 2D
+## fast path calls with zero bases.
+pub function device_offload_matmul(a: Tensor, b: Tensor, res: Tensor, a_base: int, b_base: int, r_base: int, m: int, n: int, k: int) -> bool
+    if a.device_id != 2 or b.device_id != 2
+        return false
+    end
+    if m <= 0 or n <= 0 or k <= 0
+        return false
+    end
+    let itemsize: int = 8
+    if a.dtype == 1 or a.dtype == 2
+        itemsize = 4
+    end
+    let bytes_a: int = m * k * itemsize
+    let bytes_b: int = k * n * itemsize
+    let bytes_r: int = m * n * itemsize
+    if bytes_a > 2147483647 or bytes_b > 2147483647 or bytes_r > 2147483647
+        return false
+    end
+    if alya_tensor_device_supports(a.dtype) == 0
+        return false
+    end
+    let ha = alya_tensor_ocl_alloc(bytes_a)
+    if ha == 0
+        return false
+    end
+    let hb = alya_tensor_ocl_alloc(bytes_b)
+    if hb == 0
+        alya_tensor_ocl_free(ha)
+        return false
+    end
+    let ho = alya_tensor_ocl_alloc(bytes_r)
+    if ho == 0
+        alya_tensor_ocl_free(ha)
+        alya_tensor_ocl_free(hb)
+        return false
+    end
+    let a_shift: int = a_base * itemsize
+    let b_shift: int = b_base * itemsize
+    let r_shift: int = r_base * itemsize
+    if alya_tensor_ocl_write(ha, a.data + a_shift, bytes_a) == 0
+        alya_tensor_ocl_free(ha)
+        alya_tensor_ocl_free(hb)
+        alya_tensor_ocl_free(ho)
+        return false
+    end
+    if alya_tensor_ocl_write(hb, b.data + b_shift, bytes_b) == 0
+        alya_tensor_ocl_free(ha)
+        alya_tensor_ocl_free(hb)
+        alya_tensor_ocl_free(ho)
+        return false
+    end
+    if alya_tensor_ocl_matmul(ha, hb, ho, 0, 0, 0, m, n, k, a.dtype) == 0
+        alya_tensor_ocl_free(ha)
+        alya_tensor_ocl_free(hb)
+        alya_tensor_ocl_free(ho)
+        return false
+    end
+    if alya_tensor_ocl_read(ho, res.data + r_shift, bytes_r) == 0
+        alya_tensor_ocl_free(ha)
+        alya_tensor_ocl_free(hb)
+        alya_tensor_ocl_free(ho)
+        return false
+    end
+    alya_tensor_ocl_free(ha)
+    alya_tensor_ocl_free(hb)
+    alya_tensor_ocl_free(ho)
+    return true
 end

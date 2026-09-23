@@ -312,6 +312,21 @@ function materialized_is_temp(t: Tensor, shape: array) -> bool
     return true
 end
 
+## Reports whether a batched-GEMM operand pair is offload-ready.
+##
+## Offload needs inner-2D contiguity (`[K, 1]` / `[N, 1]` strides); batch
+## bases are applied host-side, so any batch strides are fine. Conservative
+## by design: non-contiguous views silently take the CPU strided path.
+function mm_inner_contiguous(a_s0: int, a_s1: int, b_s0: int, b_s1: int, k: int, n: int) -> bool
+    if a_s0 != k or a_s1 != 1
+        return false
+    end
+    if b_s0 != n or b_s1 != 1
+        return false
+    end
+    return true
+end
+
 ## Throws unless two tensors share identical shapes.
 ##
 ## Element-wise kernels (`add`, `sub`, `mul`, `div`) require exact shape
@@ -1084,39 +1099,45 @@ pub function Tensor.matmul(self: Tensor, other: Tensor) -> Tensor
         let out_shape = [m, n]
         let res = Tensor.new(out_shape, self.dtype, self.device_id)
 
-        if dtype_is_int(self.dtype)
-            return matmul_int_into(self, other, res, m, n, k)
+        let off_ok = false
+        if self.strides[0] == k and self.strides[1] == 1 and other.strides[0] == n and other.strides[1] == 1
+            off_ok = device_offload_matmul(self, other, res, 0, 0, 0, m, n, k)
         end
-
-        let i: int = 0
-        while i < m
-            let j: int = 0
-            while j < n
-                let sum: float = 0.0
-                let p: int = 0
-                let unroll_limit: int = k - 3
-                while p < unroll_limit
-                    let a0: float = self.get_2d(i, p)
-                    let b0: float = other.get_2d(p, j)
-                    let a1: float = self.get_2d(i, p + 1)
-                    let b1: float = other.get_2d(p + 1, j)
-                    let a2: float = self.get_2d(i, p + 2)
-                    let b2: float = other.get_2d(p + 2, j)
-                    let a3: float = self.get_2d(i, p + 3)
-                    let b3: float = other.get_2d(p + 3, j)
-                    sum += (a0 * b0) + (a1 * b1) + (a2 * b2) + (a3 * b3)
-                    p += 4
-                end
-                while p < k
-                    let ap: float = self.get_2d(i, p)
-                    let bp: float = other.get_2d(p, j)
-                    sum += ap * bp
-                    p += 1
-                end
-                res.set_2d(i, j, sum)
-                j += 1
+        if off_ok == false
+            if dtype_is_int(self.dtype)
+                return matmul_int_into(self, other, res, m, n, k)
             end
-            i += 1
+
+            let i: int = 0
+            while i < m
+                let j: int = 0
+                while j < n
+                    let sum: float = 0.0
+                    let p: int = 0
+                    let unroll_limit: int = k - 3
+                    while p < unroll_limit
+                        let a0: float = self.get_2d(i, p)
+                        let b0: float = other.get_2d(p, j)
+                        let a1: float = self.get_2d(i, p + 1)
+                        let b1: float = other.get_2d(p + 1, j)
+                        let a2: float = self.get_2d(i, p + 2)
+                        let b2: float = other.get_2d(p + 2, j)
+                        let a3: float = self.get_2d(i, p + 3)
+                        let b3: float = other.get_2d(p + 3, j)
+                        sum += (a0 * b0) + (a1 * b1) + (a2 * b2) + (a3 * b3)
+                        p += 4
+                    end
+                    while p < k
+                        let ap: float = self.get_2d(i, p)
+                        let bp: float = other.get_2d(p, j)
+                        sum += ap * bp
+                        p += 1
+                    end
+                    res.set_2d(i, j, sum)
+                    j += 1
+                end
+                i += 1
+            end
         end
         return res
     end
@@ -1159,6 +1180,10 @@ function matmul_batched(a: Tensor, b: Tensor, ra: int, rb: int, m: int, n: int, 
     let b_s1: int = b.strides[rb - 1]
     let aba: int = ra - 2
     let abb: int = rb - 2
+    let inner_ok: int = 0
+    if mm_inner_contiguous(a_s0, a_s1, b_s0, b_s1, k, n)
+        inner_ok = 1
+    end
     let total_batches: int = compute_size(out_batch)
     let f: int = 0
     while f < total_batches
@@ -1183,10 +1208,18 @@ function matmul_batched(a: Tensor, b: Tensor, ra: int, rb: int, m: int, n: int, 
             end
             e -= 1
         end
-        if dtype_is_int(a.dtype)
-            matmul_batch_int_into(a, b, res, a_base, b_base, f * m * n, m, n, k, a_s0, a_s1, b_s0, b_s1, n)
-        else
-            matmul_batch_float_into(a, b, res, a_base, b_base, f * m * n, m, n, k, a_s0, a_s1, b_s0, b_s1, n)
+        let launched: int = 0
+        if inner_ok == 1
+            if device_offload_matmul(a, b, res, a_base, b_base, f * m * n, m, n, k)
+                launched = 1
+            end
+        end
+        if launched == 0
+            if dtype_is_int(a.dtype)
+                matmul_batch_int_into(a, b, res, a_base, b_base, f * m * n, m, n, k, a_s0, a_s1, b_s0, b_s1, n)
+            else
+                matmul_batch_float_into(a, b, res, a_base, b_base, f * m * n, m, n, k, a_s0, a_s1, b_s0, b_s1, n)
+            end
         end
         f += 1
     end
@@ -1313,32 +1346,34 @@ pub function Tensor.add(self: Tensor, other: Tensor) -> Tensor
     let lhs_tmp = materialized_is_temp(self, out_shape)
     let rhs_tmp = materialized_is_temp(other, out_shape)
     let res = Tensor.new(out_shape, self.dtype, self.device_id)
-    if dtype_is_int(self.dtype)
-        add_int_tensors(lhs, rhs, res)
-    else
-        let total: int = res.size
-        let i: int = 0
-        let unroll_limit: int = total - 3
-        while i < unroll_limit
-            let a0: float = lhs.get_flat(i)
-            let b0: float = rhs.get_flat(i)
-            let a1: float = lhs.get_flat(i + 1)
-            let b1: float = rhs.get_flat(i + 1)
-            let a2: float = lhs.get_flat(i + 2)
-            let b2: float = rhs.get_flat(i + 2)
-            let a3: float = lhs.get_flat(i + 3)
-            let b3: float = rhs.get_flat(i + 3)
-            res.set_flat(i, a0 + b0)
-            res.set_flat(i + 1, a1 + b1)
-            res.set_flat(i + 2, a2 + b2)
-            res.set_flat(i + 3, a3 + b3)
-            i += 4
-        end
-        while i < total
-            let a_val: float = lhs.get_flat(i)
-            let b_val: float = rhs.get_flat(i)
-            res.set_flat(i, a_val + b_val)
-            i += 1
+    if device_offload_ew(lhs, rhs, res, res.size, 0) == false
+        if dtype_is_int(self.dtype)
+            add_int_tensors(lhs, rhs, res)
+        else
+            let total: int = res.size
+            let i: int = 0
+            let unroll_limit: int = total - 3
+            while i < unroll_limit
+                let a0: float = lhs.get_flat(i)
+                let b0: float = rhs.get_flat(i)
+                let a1: float = lhs.get_flat(i + 1)
+                let b1: float = rhs.get_flat(i + 1)
+                let a2: float = lhs.get_flat(i + 2)
+                let b2: float = rhs.get_flat(i + 2)
+                let a3: float = lhs.get_flat(i + 3)
+                let b3: float = rhs.get_flat(i + 3)
+                res.set_flat(i, a0 + b0)
+                res.set_flat(i + 1, a1 + b1)
+                res.set_flat(i + 2, a2 + b2)
+                res.set_flat(i + 3, a3 + b3)
+                i += 4
+            end
+            while i < total
+                let a_val: float = lhs.get_flat(i)
+                let b_val: float = rhs.get_flat(i)
+                res.set_flat(i, a_val + b_val)
+                i += 1
+            end
         end
     end
     if lhs_tmp
@@ -1417,32 +1452,34 @@ pub function Tensor.mul(self: Tensor, other: Tensor) -> Tensor
     let lhs_tmp = materialized_is_temp(self, out_shape)
     let rhs_tmp = materialized_is_temp(other, out_shape)
     let res = Tensor.new(out_shape, self.dtype, self.device_id)
-    if dtype_is_int(self.dtype)
-        mul_int_tensors(lhs, rhs, res)
-    else
-        let total: int = res.size
-        let i: int = 0
-        let unroll_limit: int = total - 3
-        while i < unroll_limit
-            let a0: float = lhs.get_flat(i)
-            let b0: float = rhs.get_flat(i)
-            let a1: float = lhs.get_flat(i + 1)
-            let b1: float = rhs.get_flat(i + 1)
-            let a2: float = lhs.get_flat(i + 2)
-            let b2: float = rhs.get_flat(i + 2)
-            let a3: float = lhs.get_flat(i + 3)
-            let b3: float = rhs.get_flat(i + 3)
-            res.set_flat(i, a0 * b0)
-            res.set_flat(i + 1, a1 * b1)
-            res.set_flat(i + 2, a2 * b2)
-            res.set_flat(i + 3, a3 * b3)
-            i += 4
-        end
-        while i < total
-            let a_val: float = lhs.get_flat(i)
-            let b_val: float = rhs.get_flat(i)
-            res.set_flat(i, a_val * b_val)
-            i += 1
+    if device_offload_ew(lhs, rhs, res, res.size, 1) == false
+        if dtype_is_int(self.dtype)
+            mul_int_tensors(lhs, rhs, res)
+        else
+            let total: int = res.size
+            let i: int = 0
+            let unroll_limit: int = total - 3
+            while i < unroll_limit
+                let a0: float = lhs.get_flat(i)
+                let b0: float = rhs.get_flat(i)
+                let a1: float = lhs.get_flat(i + 1)
+                let b1: float = rhs.get_flat(i + 1)
+                let a2: float = lhs.get_flat(i + 2)
+                let b2: float = rhs.get_flat(i + 2)
+                let a3: float = lhs.get_flat(i + 3)
+                let b3: float = rhs.get_flat(i + 3)
+                res.set_flat(i, a0 * b0)
+                res.set_flat(i + 1, a1 * b1)
+                res.set_flat(i + 2, a2 * b2)
+                res.set_flat(i + 3, a3 * b3)
+                i += 4
+            end
+            while i < total
+                let a_val: float = lhs.get_flat(i)
+                let b_val: float = rhs.get_flat(i)
+                res.set_flat(i, a_val * b_val)
+                i += 1
+            end
         end
     end
     if lhs_tmp
