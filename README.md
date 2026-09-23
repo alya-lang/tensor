@@ -19,7 +19,7 @@ High-performance N-dimensional Tensor engine with hardware-accelerated SIMD GEMM
 - 🔄 **Zero-Copy Reshaping**: Stride-aware multidimensional views (`reshape`, `flatten`, `to_array`, `to_string` with 2D matrix rendering)
 - 🔁 **Shape Algebra**: Contiguous `transpose`, deep `copy`, `full`/`eye` constructors, in-place `fill`, and `allclose` tolerance comparison
 - 📡 **NumPy-Style Broadcasting**: Implicit right-aligned stretching in `add`/`sub`/`mul`/`div` (size-1 dimensions stretch, incompatible shapes throw), explicit zero-copy `broadcast_to` views, and `broadcast_shape` shape algebra
-- 🎛️ **Device Placement + OpenCL Offload**: Per-tensor `device_id` tagging (`CPU`/`SIMD`/`GPU`), explicit `to()` transfer staging, `synchronize()` barrier, and a portable OpenCL backend (`c/ocl.c`, runtime-loaded, no SDK) accelerating `add`/`mul`/`matmul` for `f32`/`i32`/`i64` (+ `f64` with `cl_khr_fp64`) with loud CPU fallback (see GPU roadmap below)
+- 🎛️ **Device Placement + GPU Offload**: Per-tensor `device_id` tagging (`CPU`/`SIMD`/`GPU`), explicit `to()` transfer staging, `synchronize()` event fence, and two native backends — portable OpenCL (`c/ocl.c`, runtime-loaded, no SDK) and Metal on macOS (`c/device_metal.c`, pure C over ObjC runtime, MSL at runtime) — accelerating `add`/`mul`/`matmul` (`f32`/`i32`/`i64` everywhere, + `f64` on `cl_khr_fp64` OpenCL) with loud CPU fallback (see GPU roadmap below)
 - 🛡️ **Loud Shape Errors**: Element-wise mismatches and bad reshapes `throw` instead of silently producing garbage
 - 🔒 **Public/Private Visibility (`pub`)**: Strict encapsulation of memory internals and buffer pointers
 - 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (346 assertions) and micro-benchmarks (18 kernels, incl. GPU-tagged offload)
@@ -42,8 +42,9 @@ tensor/
 │       ├── formatter.alya  # Vector & matrix string representation logic
 │       └── device.alya     # Device placement API + native registry FFI (Phase 0)
 ├── c/
-│   ├── device.c            # Accelerator registry (delegates to OpenCL discovery)
-│   └── ocl.c               # Portable OpenCL backend (dynamic load, 12 kernels)
+│   ├── device.c            # Backend router (Metal-first on macOS, OpenCL elsewhere)
+│   ├── ocl.c               # Portable OpenCL backend (dynamic load, 12 kernels)
+│   └── device_metal.c      # Metal backend, macOS only (ObjC runtime, 9 MSL kernels)
 ├── examples/
 │   └── demo.alya           # Runnable showcase (GEMM, dtypes, broadcast, algebra, devices)
 ├── tests/
@@ -218,7 +219,18 @@ main()
 
 ## 🎛️ Device Execution & GPU Roadmap
 
-Phase 1 (shipped): GPU-tagged `add`/`mul`/`matmul` offload to a portable OpenCL backend (`c/ocl.c`, runtime-loaded via `LoadLibrary`/`dlopen` — no SDK, no link flags). `f32`/`i32`/`i64` are OpenCL C core; `f64` compiles in only with `cl_khr_fp64` (queried per device). Anything unsupported — no platform, missing extension, oversized transfer, non-contiguous views, mixed placement — returns `false` through the dispatch layer and runs the CPU/SIMD kernels with placement preserved. GPU devices are preferred; CPU OpenCL devices (e.g. `pocl`, installed on Linux CI) count too, so the native path executes in CI. Set `ALYA_TENSOR_OCL_DEBUG=1` for stderr launch tracing.
+Phase 1 (shipped): GPU-tagged `add`/`mul`/`matmul` offload to two native backends behind one router (`c/device.c` picks Metal first on macOS, OpenCL elsewhere). OpenCL (`c/ocl.c`) loads the system library at runtime — no SDK, no link flags; Metal (`c/device_metal.c`) is pure C over the ObjC runtime (gui `cocoa_window.c` precedent) with MSL compiled at runtime, so no Xcode build step is needed. `f32`/`i32`/`i64` are covered on both; `f64` only where `cl_khr_fp64` exists (never on Apple GPUs). Anything unsupported — no platform, missing extension, oversized transfer, non-contiguous views, mixed placement — returns `false` through the dispatch layer and runs the CPU/SIMD kernels with placement preserved. GPU devices are preferred; CPU OpenCL devices (e.g. `pocl`, installed on Linux CI) count too, so the native path executes in CI. Set `ALYA_TENSOR_OCL_DEBUG=1` for stderr launch tracing (`[tensor-ocl]` / `[tensor-metal]`).
+
+| Step | Status | Notes |
+|---|---|---|
+| Placement API (`to`, `device_of`, `synchronize`) | ✅ Shipped | Tested (§14), green with and without a backend |
+| Native registry + FFI path (`c/device.c`) | ✅ Shipped | Compiles/links on all OSes via `[build]`; routes Metal-first on macOS |
+| OpenCL offload (`add`/`mul`/`matmul`, 4 dtypes) | ✅ Shipped | Tested (§21: 2D, batched, mixed-device fallback); verified on Intel UHD + NVIDIA RTX 3050 + `pocl` CI |
+| Metal offload (`add`/`mul`/`matmul`, f32/i32/i64) | ✅ Shipped, macOS CI is the arbiter | Naive kernels (tiling follow-up); f64 falls back on Apple GPUs |
+| CPU-fallback numerics for device-tagged tensors | ✅ Shipped | Placement preserved through ops, values exact |
+| CPU-fallback numerics for device-tagged tensors | ✅ Shipped | Placement preserved through ops, values exact |
+| CUDA backend (Windows/Linux) | ⬜ Open | Needs a self-hosted GPU runner (no GPU on hosted CI); `nvcuda.dll` dynamic-load design ready |
+| Async event fence (non-blocking launches + `synchronize` drain) | ✅ Shipped | In-order queue + blocking reads keep it correct; 64-event ring |
 
 | Step | Status | Notes |
 |---|---|---|
