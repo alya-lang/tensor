@@ -156,6 +156,34 @@ function main()
     bench_stop(runner, "Tensor.to(GPU)([32, 32])")
     x1.free()
 
+    # 12. Batched GEMM [4, 16, 16] x [4, 16, 16]
+    let ba = tensor::Tensor.ones([4, 16, 16])
+    let bb = tensor::Tensor.ones([4, 16, 16])
+    let n_bmm = 200
+    bench_start(runner, n_bmm)
+    let bmm_idx = 0
+    while bmm_idx < n_bmm
+        let res = ba.matmul(bb)
+        res.free()
+        bmm_idx += 1
+    end
+    bench_stop(runner, "Tensor.matmul batched([4, 16, 16])")
+    ba.free()
+    bb.free()
+
+    # 13. Element-wise exp [32, 32]
+    let ex = tensor::Tensor.full([32, 32], 0.5)
+    let n_exp = 2000
+    bench_start(runner, n_exp)
+    let exp_idx = 0
+    while exp_idx < n_exp
+        let res = ex.exp()
+        res.free()
+        exp_idx += 1
+    end
+    bench_stop(runner, "Tensor.exp([32, 32])")
+    ex.free()
+
     bench_summary(runner)
 end
 

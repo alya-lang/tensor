@@ -653,28 +653,145 @@ pub function Tensor.set(self: Tensor, indices: array, val: float)
     tensor_write_val(self.data, flat_idx, self.dtype, val)
 end
 
-## High-Performance SIMD-Accelerated 2D GEMM (General Matrix Multiply).
+## High-Performance SIMD-Accelerated GEMM (General Matrix Multiply).
 ## Multiplies self (M x K) by other (K x N) to produce result (M x N).
 ## Inner dot loop uses 4-way SIMD lane unrolling and FMA3 instructions.
 ## Both operands must share the storage dtype; integer dtypes accumulate
 ## in exact integer arithmetic (overflow wraps, C-style).
+## Rank-3+ inputs run batched GEMM: leading dimensions broadcast
+## right-aligned (a `[B, M, K]` by `[K, N]` works, reusing the single
+## matrix). Rank-1 inputs throw (use `sum` of an element-wise product for
+## dot products).
 pub function Tensor.matmul(self: Tensor, other: Tensor) -> Tensor
-    let m: int = self.shape[0]
-    let k: int = self.shape[1]
-    let k2: int = other.shape[0]
-    let n: int = other.shape[1]
+    let ra: int = len(self.shape)
+    let rb: int = len(other.shape)
+    if ra < 2 or rb < 2
+        throw "Tensor.matmul requires rank >= 2 (batched or 2D shapes)"
+    end
+    let m: int = self.shape[ra - 2]
+    let k: int = self.shape[ra - 1]
+    let k2: int = other.shape[rb - 2]
+    let n: int = other.shape[rb - 1]
     if k != k2
         throw "Incompatible tensor dimensions for matrix multiplication"
     end
     assert_same_dtype(self, other)
 
-    let out_shape = [m, n]
-    let res = Tensor.new(out_shape, self.dtype, self.device_id)
+    if ra == 2 and rb == 2
+        let out_shape = [m, n]
+        let res = Tensor.new(out_shape, self.dtype, self.device_id)
 
-    if dtype_is_int(self.dtype)
-        return matmul_int_into(self, other, res, m, n, k)
+        if dtype_is_int(self.dtype)
+            return matmul_int_into(self, other, res, m, n, k)
+        end
+
+        let i: int = 0
+        while i < m
+            let j: int = 0
+            while j < n
+                let sum: float = 0.0
+                let p: int = 0
+                let unroll_limit: int = k - 3
+                while p < unroll_limit
+                    let a0: float = self.get_2d(i, p)
+                    let b0: float = other.get_2d(p, j)
+                    let a1: float = self.get_2d(i, p + 1)
+                    let b1: float = other.get_2d(p + 1, j)
+                    let a2: float = self.get_2d(i, p + 2)
+                    let b2: float = other.get_2d(p + 2, j)
+                    let a3: float = self.get_2d(i, p + 3)
+                    let b3: float = other.get_2d(p + 3, j)
+                    sum += (a0 * b0) + (a1 * b1) + (a2 * b2) + (a3 * b3)
+                    p += 4
+                end
+                while p < k
+                    let ap: float = self.get_2d(i, p)
+                    let bp: float = other.get_2d(p, j)
+                    sum += ap * bp
+                    p += 1
+                end
+                res.set_2d(i, j, sum)
+                j += 1
+            end
+            i += 1
+        end
+        return res
     end
 
+    return matmul_batched(self, other, ra, rb, m, n, k)
+end
+
+## Returns the first `count` dimensions of a shape array.
+function shape_prefix(shape: array, count: int) -> array
+    let out = []
+    let i: int = 0
+    while i < count
+        out.push(shape[i])
+        i += 1
+    end
+    return out
+end
+
+## Batched GEMM core shared by `matmul` for rank-3+ inputs.
+## Loops over broadcast batch positions and runs strided 2D products at
+## per-batch buffer bases (views stay consistent through strides).
+function matmul_batched(a: Tensor, b: Tensor, ra: int, rb: int, m: int, n: int, k: int) -> Tensor
+    let batch_a = shape_prefix(a.shape, ra - 2)
+    let batch_b = shape_prefix(b.shape, rb - 2)
+    let out_batch = broadcast_shape(batch_a, batch_b)
+    let ob: int = len(out_batch)
+    let out_shape = []
+    let d: int = 0
+    while d < ob
+        out_shape.push(out_batch[d])
+        d += 1
+    end
+    out_shape.push(m)
+    out_shape.push(n)
+    let res = Tensor.new(out_shape, a.dtype, a.device_id)
+
+    let a_s0: int = a.strides[ra - 2]
+    let a_s1: int = a.strides[ra - 1]
+    let b_s0: int = b.strides[rb - 2]
+    let b_s1: int = b.strides[rb - 1]
+    let aba: int = ra - 2
+    let abb: int = rb - 2
+    let total_batches: int = compute_size(out_batch)
+    let f: int = 0
+    while f < total_batches
+        let rem: int = f
+        let a_base: int = 0
+        let b_base: int = 0
+        let e: int = ob - 1
+        while e >= 0
+            let dim: int = out_batch[e]
+            let coord: int = rem % dim
+            rem = (rem - coord) / dim
+            let rpos: int = (ob - 1) - e
+            let ka: int = aba - 1 - rpos
+            if ka >= 0
+                let adim: int = a.shape[ka]
+                a_base += (coord % adim) * a.strides[ka]
+            end
+            let kb: int = abb - 1 - rpos
+            if kb >= 0
+                let bdim: int = b.shape[kb]
+                b_base += (coord % bdim) * b.strides[kb]
+            end
+            e -= 1
+        end
+        if dtype_is_int(a.dtype)
+            matmul_batch_int_into(a, b, res, a_base, b_base, f * m * n, m, n, k, a_s0, a_s1, b_s0, b_s1, n)
+        else
+            matmul_batch_float_into(a, b, res, a_base, b_base, f * m * n, m, n, k, a_s0, a_s1, b_s0, b_s1, n)
+        end
+        f += 1
+    end
+    return res
+end
+
+## One strided 2D float product at buffer bases (batched GEMM inner core).
+function matmul_batch_float_into(a: Tensor, b: Tensor, res: Tensor, a_base: int, b_base: int, r_base: int, m: int, n: int, k: int, a_s0: int, a_s1: int, b_s0: int, b_s1: int, r_s0: int) -> Tensor
     let i: int = 0
     while i < m
         let j: int = 0
@@ -683,24 +800,55 @@ pub function Tensor.matmul(self: Tensor, other: Tensor) -> Tensor
             let p: int = 0
             let unroll_limit: int = k - 3
             while p < unroll_limit
-                let a0: float = self.get_2d(i, p)
-                let b0: float = other.get_2d(p, j)
-                let a1: float = self.get_2d(i, p + 1)
-                let b1: float = other.get_2d(p + 1, j)
-                let a2: float = self.get_2d(i, p + 2)
-                let b2: float = other.get_2d(p + 2, j)
-                let a3: float = self.get_2d(i, p + 3)
-                let b3: float = other.get_2d(p + 3, j)
+                let a0: float = a.get_flat(a_base + i * a_s0 + p * a_s1)
+                let b0: float = b.get_flat(b_base + p * b_s0 + j * b_s1)
+                let a1: float = a.get_flat(a_base + i * a_s0 + (p + 1) * a_s1)
+                let b1: float = b.get_flat(b_base + (p + 1) * b_s0 + j * b_s1)
+                let a2: float = a.get_flat(a_base + i * a_s0 + (p + 2) * a_s1)
+                let b2: float = b.get_flat(b_base + (p + 2) * b_s0 + j * b_s1)
+                let a3: float = a.get_flat(a_base + i * a_s0 + (p + 3) * a_s1)
+                let b3: float = b.get_flat(b_base + (p + 3) * b_s0 + j * b_s1)
                 sum += (a0 * b0) + (a1 * b1) + (a2 * b2) + (a3 * b3)
                 p += 4
             end
             while p < k
-                let ap: float = self.get_2d(i, p)
-                let bp: float = other.get_2d(p, j)
-                sum += ap * bp
+                sum += a.get_flat(a_base + i * a_s0 + p * a_s1) * b.get_flat(b_base + p * b_s0 + j * b_s1)
                 p += 1
             end
-            res.set_2d(i, j, sum)
+            res.set_flat(r_base + i * r_s0 + j, sum)
+            j += 1
+        end
+        i += 1
+    end
+    return res
+end
+
+## One strided 2D integer product at buffer bases (batched GEMM inner core).
+function matmul_batch_int_into(a: Tensor, b: Tensor, res: Tensor, a_base: int, b_base: int, r_base: int, m: int, n: int, k: int, a_s0: int, a_s1: int, b_s0: int, b_s1: int, r_s0: int) -> Tensor
+    let i: int = 0
+    while i < m
+        let j: int = 0
+        while j < n
+            let sum = 0
+            let p: int = 0
+            let unroll_limit: int = k - 3
+            while p < unroll_limit
+                let a0 = a.get_flat_int(a_base + i * a_s0 + p * a_s1)
+                let b0 = b.get_flat_int(b_base + p * b_s0 + j * b_s1)
+                let a1 = a.get_flat_int(a_base + i * a_s0 + (p + 1) * a_s1)
+                let b1 = b.get_flat_int(b_base + (p + 1) * b_s0 + j * b_s1)
+                let a2 = a.get_flat_int(a_base + i * a_s0 + (p + 2) * a_s1)
+                let b2 = b.get_flat_int(b_base + (p + 2) * b_s0 + j * b_s1)
+                let a3 = a.get_flat_int(a_base + i * a_s0 + (p + 3) * a_s1)
+                let b3 = b.get_flat_int(b_base + (p + 3) * b_s0 + j * b_s1)
+                sum += (a0 * b0) + (a1 * b1) + (a2 * b2) + (a3 * b3)
+                p += 4
+            end
+            while p < k
+                sum += a.get_flat_int(a_base + i * a_s0 + p * a_s1) * b.get_flat_int(b_base + p * b_s0 + j * b_s1)
+                p += 1
+            end
+            res.set_flat_int(r_base + i * r_s0 + j, sum)
             j += 1
         end
         i += 1
@@ -1051,6 +1199,198 @@ pub function Tensor.scale(self: Tensor, factor: float) -> Tensor
     return res
 end
 
+## Element-wise negation (additive inverse of every element, exact per dtype).
+pub function Tensor.neg(self: Tensor) -> Tensor
+    let res = Tensor.new(self.shape, self.dtype, self.device_id)
+    let total: int = self.size
+    if dtype_is_int(self.dtype)
+        let i: int = 0
+        while i < total
+            res.set_flat_int(i, -self.get_flat_int(i))
+            i += 1
+        end
+        return res
+    end
+    let j: int = 0
+    while j < total
+        res.set_flat(j, -self.get_flat(j))
+        j += 1
+    end
+    return res
+end
+
+## Element-wise absolute value (exact per dtype).
+pub function Tensor.abs(self: Tensor) -> Tensor
+    let res = Tensor.new(self.shape, self.dtype, self.device_id)
+    let total: int = self.size
+    if dtype_is_int(self.dtype)
+        let i: int = 0
+        while i < total
+            let v = self.get_flat_int(i)
+            if v < 0
+                res.set_flat_int(i, -v)
+            else
+                res.set_flat_int(i, v)
+            end
+            i += 1
+        end
+        return res
+    end
+    let j: int = 0
+    while j < total
+        let w: float = self.get_flat(j)
+        if w < 0.0
+            res.set_flat(j, -w)
+        else
+            res.set_flat(j, w)
+        end
+        j += 1
+    end
+    return res
+end
+
+## Element-wise square root.
+##
+## Calls the `native_sqrt` runtime directly (not the `sqrt_f` stdlib
+## wrapper): whole-program inference keys unannotated wrapper params by
+## call-site types, and a same-stem method in the unit (`Tensor.log` once
+## poisoned `log_n` this way) can silently flip them to int treatment.
+## Direct native calls carry no Alya params and are immune by construction.
+## Integer storage converts through float and truncates on store;
+## `sqrt` of negatives yields `nan` (IEEE-754).
+pub function Tensor.sqrt(self: Tensor) -> Tensor
+    let res = Tensor.new(self.shape, self.dtype, self.device_id)
+    let total: int = self.size
+    let i: int = 0
+    while i < total
+        res.set_flat(i, native_sqrt(self.get_flat(i)))
+        i += 1
+    end
+    return res
+end
+
+## Element-wise natural exponential (direct `native_exp`; see `sqrt` note).
+##
+## Integer storage converts through float and truncates on store.
+pub function Tensor.exp(self: Tensor) -> Tensor
+    let res = Tensor.new(self.shape, self.dtype, self.device_id)
+    let total: int = self.size
+    let i: int = 0
+    while i < total
+        res.set_flat(i, native_exp(self.get_flat(i)))
+        i += 1
+    end
+    return res
+end
+
+## Element-wise natural logarithm (direct `native_log`; see `sqrt` note).
+##
+## Named `ln` (not `log`) so the method stem never collides with the
+## `log_n`/`log2`/`log10` stdlib wrappers in a compiled unit. Integer
+## storage converts through float and truncates on store; `ln(0)` yields
+## `-inf`, `ln` of negatives yields `nan` (IEEE-754).
+pub function Tensor.ln(self: Tensor) -> Tensor
+    let res = Tensor.new(self.shape, self.dtype, self.device_id)
+    let total: int = self.size
+    let i: int = 0
+    while i < total
+        res.set_flat(i, native_log(self.get_flat(i)))
+        i += 1
+    end
+    return res
+end
+
+## Scalar power `x^exponent` per element.
+##
+## Non-negative integral exponents on integer storage use exact repeated
+## squaring; everything else computes `exp(exponent * ln(x))` in float
+## (integer storage truncates on store). `x^0` is `1` (including `0^0`).
+pub function Tensor.pow(self: Tensor, exponent: float) -> Tensor
+    let res = Tensor.new(self.shape, self.dtype, self.device_id)
+    let total: int = self.size
+    if dtype_is_int(self.dtype) and exponent >= 0.0 and exponent - int(exponent) == 0.0
+        let count: int = int(exponent)
+        let i: int = 0
+        while i < total
+            res.set_flat_int(i, int_pow(self.get_flat_int(i), count))
+            i += 1
+        end
+        return res
+    end
+    let j: int = 0
+    while j < total
+        res.set_flat(j, pow_float(self.get_flat(j), exponent))
+        j += 1
+    end
+    return res
+end
+
+## Exact integer power by repeated squaring (`count >= 0`).
+function int_pow(base, count: int)
+    let r = 1
+    let b = base
+    let e: int = count
+    while e > 0
+        if e % 2 == 1
+            r *= b
+        end
+        b *= b
+        e = e / 2
+    end
+    return r
+end
+
+## Float power via `exp(exponent * ln(base))` with `0^0 == 1` and
+## `0^negative == inf` edge handling.
+function pow_float(base: float, exponent: float) -> float
+    if exponent == 0.0
+        return 1.0
+    end
+    if base == 0.0
+        if exponent < 0.0
+            return 1.0 / base
+        end
+        return 0.0
+    end
+    return native_exp(exponent * native_log(base))
+end
+
+## Element-wise clamp into `[lo, hi]` (exact per dtype).
+pub function Tensor.clip(self: Tensor, lo: float, hi: float) -> Tensor
+    let res = Tensor.new(self.shape, self.dtype, self.device_id)
+    let total: int = self.size
+    if dtype_is_int(self.dtype)
+        let lo_i = int(lo)
+        let hi_i = int(hi)
+        let i: int = 0
+        while i < total
+            let v = self.get_flat_int(i)
+            if v < lo_i
+                res.set_flat_int(i, lo_i)
+            elif v > hi_i
+                res.set_flat_int(i, hi_i)
+            else
+                res.set_flat_int(i, v)
+            end
+            i += 1
+        end
+        return res
+    end
+    let j: int = 0
+    while j < total
+        let w: float = self.get_flat(j)
+        if w < lo
+            res.set_flat(j, lo)
+        elif w > hi
+            res.set_flat(j, hi)
+        else
+            res.set_flat(j, w)
+        end
+        j += 1
+    end
+    return res
+end
+
 ## Computes the scalar sum of all elements in the tensor (4-way unrolled).
 ## Integer storage accumulates exactly in integer arithmetic; the final
 ## total converts to float (exact below 2^53).
@@ -1154,6 +1494,119 @@ pub function Tensor.max(self: Tensor) -> float
         i += 1
     end
     return best
+end
+
+## Computes the scalar product of all elements in the tensor.
+## Integer storage multiplies exactly in integer arithmetic (overflow wraps,
+## C-style); the empty product is `1`.
+pub function Tensor.prod(self: Tensor) -> float
+    if dtype_is_int(self.dtype)
+        let acc = 1
+        let total: int = self.size
+        let i: int = 0
+        while i < total
+            acc *= self.get_flat_int(i)
+            i += 1
+        end
+        return acc + 0.0
+    end
+    let total_prod: float = 1.0
+    let n: int = self.size
+    let j: int = 0
+    while j < n
+        total_prod *= self.get_flat(j)
+        j += 1
+    end
+    return total_prod
+end
+
+## Computes the population variance of all elements (divides by N).
+## Integer storage converts through float (exact below 2^53).
+pub function Tensor.variance(self: Tensor) -> float
+    if self.size == 0
+        throw "Cannot compute variance of an empty tensor"
+    end
+    let mu: float = self.mean()
+    let acc: float = 0.0
+    let total: int = self.size
+    let i: int = 0
+    while i < total
+        let d: float = self.get_flat(i) - mu
+        acc += d * d
+        i += 1
+    end
+    return acc / self.size
+end
+
+## Computes the population standard deviation (`sqrt` of `variance`).
+pub function Tensor.std(self: Tensor) -> float
+    return native_sqrt(self.variance())
+end
+
+## Returns the flat index of the minimum element (first occurrence wins).
+pub function Tensor.argmin(self: Tensor) -> int
+    if self.size == 0
+        throw "Cannot compute argmin of an empty tensor"
+    end
+    if dtype_is_int(self.dtype)
+        let best = self.get_flat_int(0)
+        let best_idx: int = 0
+        let i: int = 1
+        while i < self.size
+            let v = self.get_flat_int(i)
+            if v < best
+                best = v
+                best_idx = i
+            end
+            i += 1
+        end
+        return best_idx
+    end
+    let best_f: float = self.get_flat(0)
+    let best_j: int = 0
+    let j: int = 1
+    while j < self.size
+        let w: float = self.get_flat(j)
+        if w < best_f
+            best_f = w
+            best_j = j
+        end
+        j += 1
+    end
+    return best_j
+end
+
+## Returns the flat index of the maximum element (first occurrence wins).
+pub function Tensor.argmax(self: Tensor) -> int
+    if self.size == 0
+        throw "Cannot compute argmax of an empty tensor"
+    end
+    if dtype_is_int(self.dtype)
+        let best = self.get_flat_int(0)
+        let best_idx: int = 0
+        let i: int = 1
+        while i < self.size
+            let v = self.get_flat_int(i)
+            if v > best
+                best = v
+                best_idx = i
+            end
+            i += 1
+        end
+        return best_idx
+    end
+    let best_f: float = self.get_flat(0)
+    let best_j: int = 0
+    let j: int = 1
+    while j < self.size
+        let w: float = self.get_flat(j)
+        if w > best_f
+            best_f = w
+            best_j = j
+        end
+        j += 1
+    end
+    return best_j
 end
 
 ## Returns a new Tensor view with a reshaped dimension configuration.

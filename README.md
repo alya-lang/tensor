@@ -22,7 +22,10 @@ High-performance N-dimensional Tensor engine with hardware-accelerated SIMD GEMM
 - 🎛️ **Device Placement (Phase 0)**: Per-tensor `device_id` tagging (`CPU`/`SIMD`/`GPU`), explicit `to()` transfer staging, `synchronize()` barrier, and a native accelerator registry (`c/device.c`) — no backend registered yet, so compute honestly falls back to CPU/SIMD (see GPU roadmap below)
 - 🛡️ **Loud Shape Errors**: Element-wise mismatches and bad reshapes `throw` instead of silently producing garbage
 - 🔒 **Public/Private Visibility (`pub`)**: Strict encapsulation of memory internals and buffer pointers
-- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (146 assertions) and micro-benchmarks
+- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (198 assertions) and micro-benchmarks
+- 🧮 **Element-Wise Math**: `neg`, `abs`, `sqrt`, `exp`, `ln`, `pow`, `clip` (exact integer paths where closed; direct native calls, immune to inference hazards)
+- 📉 **Extended Reductions**: `prod`, population `variance`/`std`, `argmin`/`argmax`
+- 📦 **Batched GEMM**: Rank-3+ `matmul` with broadcast batch dimensions (strided, view-consistent)
 
 ---
 
@@ -42,7 +45,7 @@ tensor/
 ├── examples/
 │   └── demo.alya           # Runnable usage examples
 ├── tests/
-│   └── test_basic.alya     # Automated test suite (146 assertions)
+│   └── test_basic.alya     # Automated test suite (198 assertions)
 └── benches/
     └── bench_basic.alya    # Micro-benchmarks (allocation, GEMM, reductions)
 ```
@@ -125,16 +128,29 @@ main()
 | `Tensor.fill(self, val)` | `pub method` | Overwrites every element in place. |
 | `Tensor.get_flat_int(self, idx)` | `pub method` | Exact integer element access (no float mediation). |
 | `Tensor.set_flat_int(self, idx, val)` | `pub method` | Integer element update (integer storage). |
-| `Tensor.matmul(self, other)` | `pub method` | SIMD-accelerated 2D GEMM matrix multiplication ($M \times K \times N$). |
+| `Tensor.matmul(self, other)` | `pub method` | SIMD-accelerated 2D GEMM ($M \times K \times N$); rank-3+ runs batched GEMM with broadcast batch dims. |
+| `Tensor.add(self, other)` | `pub method` | Vectorized element-wise addition with broadcasting. |
 | `Tensor.add(self, other)` | `pub method` | Vectorized element-wise addition of two matching-shape tensors. |
-| `Tensor.sub(self, other)` | `pub method` | Vectorized element-wise subtraction of two matching-shape tensors. |
-| `Tensor.mul(self, other)` | `pub method` | Vectorized element-wise multiplication (Hadamard product). |
-| `Tensor.div(self, other)` | `pub method` | Vectorized element-wise division (IEEE-754 semantics on divide-by-zero). |
+| `Tensor.sub(self, other)` | `pub method` | Vectorized element-wise subtraction with broadcasting. |
+| `Tensor.mul(self, other)` | `pub method` | Vectorized element-wise multiplication (Hadamard product) with broadcasting. |
+| `Tensor.div(self, other)` | `pub method` | Vectorized element-wise division with broadcasting (IEEE-754 semantics on divide-by-zero). |
 | `Tensor.scale(self, factor)` | `pub method` | Multiplies all elements by a scalar float multiplier. |
+| `Tensor.neg(self)` | `pub method` | Element-wise negation (exact per dtype). |
+| `Tensor.abs(self)` | `pub method` | Element-wise absolute value (exact per dtype). |
+| `Tensor.sqrt(self)` | `pub method` | Element-wise square root (int storage truncates on store). |
+| `Tensor.exp(self)` | `pub method` | Element-wise natural exponential (int storage truncates on store). |
+| `Tensor.ln(self)` | `pub method` | Element-wise natural logarithm (int storage truncates on store). |
+| `Tensor.pow(self, exponent)` | `pub method` | Element-wise power; exact repeated squaring for non-negative integral exponents on int storage. |
+| `Tensor.clip(self, lo, hi)` | `pub method` | Element-wise clamp into `[lo, hi]` (exact per dtype). |
 | `Tensor.sum(self)` | `pub method` | Computes horizontal scalar sum of all elements. |
+| `Tensor.prod(self)` | `pub method` | Computes the scalar product of all elements (empty product is `1`). |
 | `Tensor.mean(self)` | `pub method` | Computes the arithmetic mean of all elements. |
+| `Tensor.variance(self)` | `pub method` | Computes the population variance (divides by N). |
+| `Tensor.std(self)` | `pub method` | Computes the population standard deviation. |
 | `Tensor.min(self)` | `pub method` | Finds the minimum element value. |
 | `Tensor.max(self)` | `pub method` | Finds the maximum element value. |
+| `Tensor.argmin(self)` | `pub method` | Returns the flat index of the minimum element (first occurrence wins). |
+| `Tensor.argmax(self)` | `pub method` | Returns the flat index of the maximum element (first occurrence wins). |
 | `Tensor.get_2d(self, row, col)` | `pub method` | Fast 2D matrix element access. |
 | `Tensor.set_2d(self, row, col, val)`| `pub method` | Fast 2D matrix element mutation. |
 | `Tensor.reshape(self, new_shape)` | `pub method` | Creates a reshaped view with updated dimension strides. Throws on element-count mismatch. |
