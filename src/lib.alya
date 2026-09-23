@@ -6,6 +6,7 @@
 
 import "std/mem"
 import "std/simd"
+import "std/math"
 import "./types.alya"
 import "./core/formatter.alya"
 import "./core/device.alya"
@@ -432,6 +433,146 @@ pub function Tensor.from_array_int(shape: array, arr: array, dtype: int = 2) -> 
     return t
 end
 
+## Creates a 1D Tensor with values `[0, 1, ..., n-1]` (integer-exact).
+##
+## ### Parameters
+## - `n`: Element count (shape `[n]`).
+## - `dtype`: Storage dtype tag (`2` = Int32, `3` = Int64, float tags convert exactly).
+##
+## ### Returns
+## The initialized rank-1 `Tensor` instance.
+pub function Tensor.arange(n: int, dtype: int = 2) -> Tensor
+    if n < 0
+        throw "Tensor.arange requires a non-negative count"
+    end
+    let t = Tensor.new([n], dtype)
+    if dtype_is_int(dtype)
+        let i: int = 0
+        while i < n
+            t.set_flat_int(i, i)
+            i += 1
+        end
+        return t
+    end
+    let j: int = 0
+    while j < n
+        t.set_flat(j, float(j))
+        j += 1
+    end
+    return t
+end
+
+## Creates a 1D Tensor with integer-stepped values from `start` (inclusive)
+## to `stop` (exclusive): `start, start+step, ...`.
+##
+## Integer-exact for integer storage; throws on a zero step. A
+## sign-mismatched range (e.g. ascending range with negative step) yields
+## an empty tensor.
+##
+## ### Parameters
+## - `start`: First value (inclusive).
+## - `stop`: End bound (exclusive).
+## - `step`: Step between values (non-zero).
+## - `dtype`: Storage dtype tag (integer tags exact, float tags convert exactly).
+##
+## ### Returns
+## The initialized rank-1 `Tensor` instance.
+pub function Tensor.arange_step(start: int, stop: int, step: int, dtype: int = 2) -> Tensor
+    if step == 0
+        throw "Tensor.arange_step requires a non-zero step"
+    end
+    let span: int = stop - start
+    let count: int = 0
+    if (span > 0 and step > 0) or (span < 0 and step < 0)
+        count = span / step
+        if span % step != 0
+            count += 1
+        end
+    end
+    let t = Tensor.new([count], dtype)
+    if dtype_is_int(dtype)
+        let i: int = 0
+        while i < count
+            t.set_flat_int(i, start + i * step)
+            i += 1
+        end
+        return t
+    end
+    let j: int = 0
+    while j < count
+        t.set_flat(j, float(start + j * step))
+        j += 1
+    end
+    return t
+end
+
+## Creates a 1D Tensor with `num` evenly spaced values from `start` to
+## `stop` (both inclusive).
+##
+## ### Parameters
+## - `start`: First value.
+## - `stop`: Last value.
+## - `num`: Point count (must be positive; `1` yields `[start]`).
+## - `dtype`: Storage dtype tag (integer storage truncates on store).
+##
+## ### Returns
+## The initialized rank-1 `Tensor` instance.
+pub function Tensor.linspace(start: float, stop: float, num: int, dtype: int = 0) -> Tensor
+    if num <= 0
+        throw "Tensor.linspace requires a positive point count"
+    end
+    let t = Tensor.new([num], dtype)
+    if num == 1
+        t.set_flat(0, start)
+        return t
+    end
+    let step: float = (stop - start) / (num - 1)
+    let i: int = 0
+    while i < num
+        t.set_flat(i, start + float(i) * step)
+        i += 1
+    end
+    return t
+end
+
+## Creates a Tensor with standard-normal random values (Box-Muller).
+##
+## Uses `std/math` `rand_float` as the uniform source; values are exact for
+## float storage and truncate on store for integer storage.
+##
+## ### Parameters
+## - `shape`: Dimension size array.
+## - `dtype`: Storage dtype tag (`0` = Float64, `1` = Float32, others convert).
+##
+## ### Returns
+## The initialized `Tensor` instance.
+pub function Tensor.randn(shape, dtype: int = 0) -> Tensor
+    let t = Tensor.new(shape, dtype)
+    let total: int = t.size
+    let i: int = 0
+    while i + 1 < total
+        let u1: float = 1.0 - rand_float()
+        if u1 < 0.0000000001
+            u1 = 0.0000000001
+        end
+        let u2: float = rand_float()
+        let mag: float = native_sqrt(-2.0 * native_log(u1))
+        let ang: float = 6.283185307179586 * u2
+        t.set_flat(i, mag * native_cos(ang))
+        t.set_flat(i + 1, mag * native_sin(ang))
+        i += 2
+    end
+    if i < total
+        let u1b: float = 1.0 - rand_float()
+        if u1b < 0.0000000001
+            u1b = 0.0000000001
+        end
+        let u2b: float = rand_float()
+        t.set_flat(i, native_sqrt(-2.0 * native_log(u1b)) * native_cos(6.283185307179586 * u2b))
+    end
+    return t
+end
+
 ## Creates a Tensor with every element set to a fill value.
 ##
 ## ### Parameters
@@ -651,6 +792,49 @@ pub function Tensor.set(self: Tensor, indices: array, val: float)
         i += 1
     end
     tensor_write_val(self.data, flat_idx, self.dtype, val)
+end
+
+## Multi-dimensional exact integer element access.
+##
+## Integer storage reads exactly (including Int64 beyond 2^53); float
+## storage truncates toward zero.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `indices`: Coordinate index array.
+##
+## ### Returns
+## The exact integer element value.
+pub function Tensor.get_int(self: Tensor, indices: array)
+    let flat_idx: int = 0
+    let i: int = 0
+    let ndim: int = len(indices)
+    while i < ndim
+        let coord: int = indices[i]
+        let st: int = self.strides[i]
+        flat_idx += coord * st
+        i += 1
+    end
+    return tensor_read_int(self.data, flat_idx, self.dtype)
+end
+
+## Multi-dimensional integer element update (integer storage).
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `indices`: Coordinate index array.
+## - `val`: Replacement integer value.
+pub function Tensor.set_int(self: Tensor, indices: array, val)
+    let flat_idx: int = 0
+    let i: int = 0
+    let ndim: int = len(indices)
+    while i < ndim
+        let coord: int = indices[i]
+        let st: int = self.strides[i]
+        flat_idx += coord * st
+        i += 1
+    end
+    tensor_write_int(self.data, flat_idx, self.dtype, val)
 end
 
 ## High-Performance SIMD-Accelerated GEMM (General Matrix Multiply).
@@ -1724,7 +1908,330 @@ pub function Tensor.broadcast_to(self: Tensor, shape: array) -> Tensor
     return Tensor { shape: shape, strides: new_strides, size: compute_size(shape), dtype: self.dtype, device_id: self.device_id, data: self.data }
 end
 
+## Returns a view with all size-1 dimensions removed.
+##
+## Shares the buffer (see `reshape`); a fully-squeezed rank-0 shape `[]`
+## still addresses its single element.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+##
+## ### Returns
+## A `Tensor` view with squeezed strides.
+pub function Tensor.squeeze(self: Tensor) -> Tensor
+    let ns = []
+    for d in self.shape
+        if d != 1
+            ns.push(d)
+        end
+    end
+    return self.reshape(ns)
+end
+
+## Returns a view with a size-1 dimension inserted at `dim`.
+##
+## Shares the buffer (see `reshape`); `dim` must satisfy `0 <= dim <= rank`.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `dim`: Insertion position.
+##
+## ### Returns
+## A `Tensor` view with the widened shape.
+pub function Tensor.unsqueeze(self: Tensor, dim: int) -> Tensor
+    let rank: int = len(self.shape)
+    if dim < 0 or dim > rank
+        throw "Tensor.unsqueeze dim out of range"
+    end
+    let ns = []
+    let i: int = 0
+    while i < dim
+        ns.push(self.shape[i])
+        i += 1
+    end
+    ns.push(1)
+    while i < rank
+        ns.push(self.shape[i])
+        i += 1
+    end
+    return self.reshape(ns)
+end
+
+## Returns a copy with dimensions reordered by `axes`.
+##
+## Unlike `transpose` (2D-only), `permute` handles any rank. The result is
+## a fresh contiguous tensor (never a strided view), so flat kernels keep
+## working on it. `axes` must list every dimension exactly once.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `axes`: New order of dimensions (a permutation of `0..rank-1`).
+##
+## ### Returns
+## A new contiguous `Tensor` with permuted shape.
+pub function Tensor.permute(self: Tensor, axes: array) -> Tensor
+    let rank: int = len(self.shape)
+    if len(axes) != rank
+        throw "Tensor.permute axes must list every dimension once"
+    end
+    let new_shape = []
+    let mapped = []
+    let i: int = 0
+    while i < rank
+        let ax: int = axes[i]
+        if ax < 0 or ax >= rank
+            throw "Tensor.permute axis out of range"
+        end
+        let k: int = 0
+        while k < i
+            if axes[k] == ax
+                throw "Tensor.permute axes must not repeat"
+            end
+            k += 1
+        end
+        new_shape.push(self.shape[ax])
+        mapped.push(self.strides[ax])
+        i += 1
+    end
+    let res = Tensor.new(new_shape, self.dtype, self.device_id)
+    let total: int = res.size
+    let is_int: int = 0
+    if dtype_is_int(self.dtype)
+        is_int = 1
+    end
+    let f: int = 0
+    while f < total
+        let rem: int = f
+        let src_idx: int = 0
+        let d: int = rank - 1
+        while d >= 0
+            let dim: int = new_shape[d]
+            let coord: int = rem % dim
+            rem = (rem - coord) / dim
+            src_idx += coord * mapped[d]
+            d -= 1
+        end
+        if is_int == 1
+            res.set_flat_int(f, self.get_flat_int(src_idx))
+        else
+            res.set_flat(f, self.get_flat(src_idx))
+        end
+        f += 1
+    end
+    return res
+end
+
+## Returns a contiguous copy sliced along one dimension (`step` is 1).
+##
+## Bounds are strict: `0 <= start <= stop <= shape[dim]`, otherwise throws.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `dim`: Dimension to slice.
+## - `start`: First index (inclusive).
+## - `stop`: End index (exclusive).
+##
+## ### Returns
+## A new contiguous `Tensor` holding the sliced elements.
+pub function Tensor.slice(self: Tensor, dim: int, start: int, stop: int) -> Tensor
+    let rank: int = len(self.shape)
+    if dim < 0 or dim >= rank
+        throw "Tensor.slice dim out of range"
+    end
+    let extent: int = self.shape[dim]
+    if start < 0 or stop < start or stop > extent
+        throw "Tensor.slice bounds out of range"
+    end
+    let new_shape = []
+    let i: int = 0
+    while i < rank
+        if i == dim
+            new_shape.push(stop - start)
+        else
+            new_shape.push(self.shape[i])
+        end
+        i += 1
+    end
+    let res = Tensor.new(new_shape, self.dtype, self.device_id)
+    let total: int = res.size
+    let is_int: int = 0
+    if dtype_is_int(self.dtype)
+        is_int = 1
+    end
+    let f: int = 0
+    while f < total
+        let rem: int = f
+        let src_idx: int = 0
+        let d: int = rank - 1
+        while d >= 0
+            let dd: int = new_shape[d]
+            let coord: int = rem % dd
+            rem = (rem - coord) / dd
+            if d == dim
+                coord += start
+            end
+            src_idx += coord * self.strides[d]
+            d -= 1
+        end
+        if is_int == 1
+            res.set_flat_int(f, self.get_flat_int(src_idx))
+        else
+            res.set_flat(f, self.get_flat(src_idx))
+        end
+        f += 1
+    end
+    return res
+end
+
+## Concatenates a list of tensors along `dim` into a new contiguous tensor.
+##
+## All inputs must share rank and dtype; every dimension except `dim`
+## must match. Result placement follows the first tensor.
+##
+## ### Parameters
+## - `tensors`: Non-empty array of `Tensor` instances.
+## - `dim`: Dimension to concatenate along.
+##
+## ### Returns
+## A new contiguous `Tensor`.
+pub function Tensor.concat(tensors: array, dim: int) -> Tensor
+    if len(tensors) == 0
+        throw "Tensor.concat requires at least one tensor"
+    end
+    let first: Tensor = tensors[0]
+    let rank: int = len(first.shape)
+    if dim < 0 or dim >= rank
+        throw "Tensor.concat dim out of range"
+    end
+    let out_shape = []
+    let i: int = 0
+    while i < rank
+        out_shape.push(first.shape[i])
+        i += 1
+    end
+    out_shape[dim] = 0
+    let q: int = 0
+    while q < len(tensors)
+        let t: Tensor = tensors[q]
+        if len(t.shape) != rank
+            throw "Tensor.concat requires equal ranks"
+        end
+        if t.dtype != first.dtype
+            throw "Tensor.concat requires identical dtypes"
+        end
+        let e: int = 0
+        while e < rank
+            if e != dim and t.shape[e] != first.shape[e]
+                throw "Tensor.concat requires matching non-concat dimensions"
+            end
+            e += 1
+        end
+        out_shape[dim] = out_shape[dim] + t.shape[dim]
+        q += 1
+    end
+    let res = Tensor.new(out_shape, first.dtype, first.device_id)
+    let is_int: int = 0
+    if dtype_is_int(first.dtype)
+        is_int = 1
+    end
+    let base: int = 0
+    let w: int = 0
+    while w < len(tensors)
+        let s: Tensor = tensors[w]
+        let edge: int = s.shape[dim]
+        let total: int = s.size
+        let f: int = 0
+        while f < total
+            let rem: int = f
+            let dst_idx: int = 0
+            let src_idx: int = 0
+            let d: int = rank - 1
+            while d >= 0
+                let dd: int = s.shape[d]
+                let coord: int = rem % dd
+                rem = (rem - coord) / dd
+                src_idx += coord * s.strides[d]
+                if d == dim
+                    coord += base
+                end
+                dst_idx += coord * res.strides[d]
+                d -= 1
+            end
+            if is_int == 1
+                res.set_flat_int(dst_idx, s.get_flat_int(src_idx))
+            else
+                res.set_flat(dst_idx, s.get_flat(src_idx))
+            end
+            f += 1
+        end
+        base += edge
+        w += 1
+    end
+    return res
+end
+
+## Stacks a list of tensors along a new dimension `dim`.
+##
+## Equivalent to unsqueezing each input at `dim` and concatenating;
+## implemented exactly that way (views are never freed).
+##
+## ### Parameters
+## - `tensors`: Non-empty array of same-shaped, same-dtype `Tensor` instances.
+## - `dim`: Position of the new dimension (`0 <= dim <= rank`).
+##
+## ### Returns
+## A new contiguous `Tensor` with one extra dimension.
+pub function Tensor.stack(tensors: array, dim: int) -> Tensor
+    if len(tensors) == 0
+        throw "Tensor.stack requires at least one tensor"
+    end
+    let views = []
+    let q: int = 0
+    while q < len(tensors)
+        let t: Tensor = tensors[q]
+        views.push(t.unsqueeze(dim))
+        q += 1
+    end
+    return Tensor.concat(views, dim)
+end
+
+## Splits a tensor into `parts` equal contiguous chunks along `dim`.
+##
+## `shape[dim]` must divide evenly by `parts`, otherwise throws.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `parts`: Chunk count (positive).
+## - `dim`: Dimension to split.
+##
+## ### Returns
+## An array of new contiguous `Tensor` chunks (caller frees each).
+pub function Tensor.split(self: Tensor, parts: int, dim: int) -> array
+    let rank: int = len(self.shape)
+    if parts <= 0
+        throw "Tensor.split requires a positive part count"
+    end
+    if dim < 0 or dim >= rank
+        throw "Tensor.split dim out of range"
+    end
+    let extent: int = self.shape[dim]
+    if extent % parts != 0
+        throw "Tensor.split requires an evenly divisible dimension"
+    end
+    let chunk: int = extent / parts
+    let out = []
+    let p: int = 0
+    while p < parts
+        out.push(self.slice(dim, p * chunk, (p + 1) * chunk))
+        p += 1
+    end
+    return out
+end
+
 ## Converts all tensor elements to a standard flat Alya float array.
+##
+## Integer storage converts to float (exact below 2^53); use
+## `to_array_int` for exact integer export.
 ##
 ## ### Parameters
 ## - `self`: The target `Tensor` instance.
@@ -1738,6 +2245,27 @@ pub function Tensor.to_array(self: Tensor) -> array
     while i < total
         let v: float = self.get_flat(i)
         arr.push(v)
+        i += 1
+    end
+    return arr
+end
+
+## Converts all tensor elements to a flat Alya integer array.
+##
+## Integer storage exports exactly (including Int64); float storage
+## truncates toward zero.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+##
+## ### Returns
+## Flat integer element array.
+pub function Tensor.to_array_int(self: Tensor) -> array
+    let arr = []
+    let total: int = self.size
+    let i: int = 0
+    while i < total
+        arr.push(self.get_flat_int(i))
         i += 1
     end
     return arr

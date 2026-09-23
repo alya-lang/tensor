@@ -184,6 +184,32 @@ function main()
     bench_stop(runner, "Tensor.exp([32, 32])")
     ex.free()
 
+    # 14. Concat [[16, 16], [16, 16]] -> [32, 16]
+    let k1 = tensor::Tensor.ones([16, 16])
+    let k2 = tensor::Tensor.ones([16, 16])
+    let n_cat = 2000
+    bench_start(runner, n_cat)
+    let cat_idx = 0
+    while cat_idx < n_cat
+        let res = tensor::Tensor.concat([k1, k2], 0)
+        res.free()
+        cat_idx += 1
+    end
+    bench_stop(runner, "Tensor.concat([16, 16] x2)")
+    k1.free()
+    k2.free()
+
+    # 15. Standard-normal sampling [32, 32]
+    let n_rn = 500
+    bench_start(runner, n_rn)
+    let rn_idx = 0
+    while rn_idx < n_rn
+        let res = tensor::Tensor.randn([32, 32])
+        res.free()
+        rn_idx += 1
+    end
+    bench_stop(runner, "Tensor.randn([32, 32])")
+
     bench_summary(runner)
 end
 

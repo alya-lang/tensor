@@ -22,7 +22,7 @@ High-performance N-dimensional Tensor engine with hardware-accelerated SIMD GEMM
 - 🎛️ **Device Placement (Phase 0)**: Per-tensor `device_id` tagging (`CPU`/`SIMD`/`GPU`), explicit `to()` transfer staging, `synchronize()` barrier, and a native accelerator registry (`c/device.c`) — no backend registered yet, so compute honestly falls back to CPU/SIMD (see GPU roadmap below)
 - 🛡️ **Loud Shape Errors**: Element-wise mismatches and bad reshapes `throw` instead of silently producing garbage
 - 🔒 **Public/Private Visibility (`pub`)**: Strict encapsulation of memory internals and buffer pointers
-- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (198 assertions) and micro-benchmarks
+- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (258 assertions) and micro-benchmarks
 - 🧮 **Element-Wise Math**: `neg`, `abs`, `sqrt`, `exp`, `ln`, `pow`, `clip` (exact integer paths where closed; direct native calls, immune to inference hazards)
 - 📉 **Extended Reductions**: `prod`, population `variance`/`std`, `argmin`/`argmax`
 - 📦 **Batched GEMM**: Rank-3+ `matmul` with broadcast batch dimensions (strided, view-consistent)
@@ -45,7 +45,7 @@ tensor/
 ├── examples/
 │   └── demo.alya           # Runnable showcase (GEMM, dtypes, broadcast, algebra, devices)
 ├── tests/
-│   └── test_basic.alya     # Automated test suite (198 assertions)
+│   └── test_basic.alya     # Automated test suite (258 assertions)
 └── benches/
     └── bench_basic.alya    # Micro-benchmarks (allocation, GEMM, reductions)
 ```
@@ -121,6 +121,10 @@ main()
 | `Tensor.ones(shape, dtype)` | `pub function` | Creates a new Tensor initialized with all `1` (converts to storage dtype). |
 | `Tensor.from_array(shape, arr, dtype)` | `pub function` | Creates a new Tensor from a flat **float** element array (`[1.0, 2.0]`, not `[1, 2]`). |
 | `Tensor.from_array_int(shape, arr, dtype)` | `pub function` | Creates a new Tensor from a flat **integer** element array (exact storage, incl. Int64). |
+| `Tensor.arange(n, dtype)` | `pub function` | Creates rank-1 `[0..n)` (integer-exact). |
+| `Tensor.arange_step(start, stop, step, dtype)` | `pub function` | Creates rank-1 integer-stepped `[start..stop)` (throws on zero step). |
+| `Tensor.linspace(start, stop, num, dtype)` | `pub function` | Creates rank-1 with `num` evenly spaced points (inclusive). |
+| `Tensor.randn(shape, dtype)` | `pub function` | Creates a Tensor with standard-normal random values (Box-Muller). |
 | `Tensor.full(shape, val, dtype)` | `pub function` | Creates a new Tensor with every element set to `val`. |
 | `Tensor.eye(n, dtype)` | `pub function` | Creates an n-by-n identity matrix. |
 | `Tensor.copy(self)` | `pub method` | Deep copy with a freshly allocated buffer (no aliasing). |
@@ -128,6 +132,8 @@ main()
 | `Tensor.fill(self, val)` | `pub method` | Overwrites every element in place. |
 | `Tensor.get_flat_int(self, idx)` | `pub method` | Exact integer element access (no float mediation). |
 | `Tensor.set_flat_int(self, idx, val)` | `pub method` | Integer element update (integer storage). |
+| `Tensor.get_int(self, indices)` | `pub method` | Exact integer N-d element access. |
+| `Tensor.set_int(self, indices, val)` | `pub method` | Integer N-d element update. |
 | `Tensor.matmul(self, other)` | `pub method` | SIMD-accelerated 2D GEMM ($M \times K \times N$); rank-3+ runs batched GEMM with broadcast batch dims. |
 | `Tensor.add(self, other)` | `pub method` | Vectorized element-wise addition with broadcasting. |
 | `Tensor.add(self, other)` | `pub method` | Vectorized element-wise addition of two matching-shape tensors. |
@@ -154,12 +160,20 @@ main()
 | `Tensor.get_2d(self, row, col)` | `pub method` | Fast 2D matrix element access. |
 | `Tensor.set_2d(self, row, col, val)`| `pub method` | Fast 2D matrix element mutation. |
 | `Tensor.reshape(self, new_shape)` | `pub method` | Creates a reshaped view with updated dimension strides. Throws on element-count mismatch. |
+| `Tensor.squeeze(self)` | `pub method` | View with size-1 dimensions removed. |
+| `Tensor.unsqueeze(self, dim)` | `pub method` | View with a size-1 dimension inserted at `dim`. |
+| `Tensor.permute(self, axes)` | `pub method` | Contiguous copy with reordered dimensions (validates the permutation). |
+| `Tensor.slice(self, dim, start, stop)` | `pub method` | Contiguous copy sliced along one dimension (strict bounds). |
+| `Tensor.concat(tensors, dim)` | `pub function` | Concatenates same-rank, same-dtype tensors along `dim`. |
+| `Tensor.stack(tensors, dim)` | `pub function` | Stacks same-shaped tensors along a new dimension. |
+| `Tensor.split(self, parts, dim)` | `pub method` | Splits into `parts` equal contiguous chunks (even division required). |
 | `Tensor.broadcast_to(self, shape)` | `pub method` | Zero-copy broadcast view stretched to `shape` (stride-0 dims, shared buffer). |
 | `broadcast_shape(a, b)` | `pub function` | Computes the right-aligned broadcast output shape of two shape arrays. |
 | `Tensor.flatten(self)` | `pub method` | Returns a flattened rank-1 (`[size]`) view sharing the same buffer. |
 | `Tensor.transpose(self)` | `pub method` | Returns the 2D transpose as a new contiguous tensor. |
 | `Tensor.allclose(self, other, tol)` | `pub method` | Approximate element-wise equality within absolute tolerance `tol` (default `1e-9`); `false` on shape mismatch. |
 | `Tensor.to_array(self)` | `pub method` | Converts all tensor elements to a standard flat Alya float array. |
+| `Tensor.to_array_int(self)` | `pub method` | Converts all tensor elements to a flat Alya integer array (exact for integer storage). |
 | `Tensor.free(self)` | `pub method` | Releases 32-byte aligned buffer from heap memory. |
 | `TensorDtype` | `pub enum` | Supported numerical data types (`Float64`, `Float32`, `Int64`, `Int32`). |
 | `TensorDevice` | `pub enum` | Target execution device backend (`CPU`, `SIMD`, `GPU`). |

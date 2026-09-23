@@ -557,6 +557,177 @@ function main()
     rk_b.free()
 
     # ═══════════════════════════════════════════════════════════════
+    # 16. Range Constructors (arange, linspace, randn)
+    # ═══════════════════════════════════════════════════════════════
+    let ar = tensor::Tensor.arange(5)
+    runner_assert_eq(r, ar.shape[0], 5, "arange(5) shape == [5]")
+    runner_assert_eq(r, ar.get_flat_int(0), 0, "arange starts at 0")
+    runner_assert_eq(r, ar.get_flat_int(4), 4, "arange ends at n-1")
+    ar.free()
+    let ar0 = tensor::Tensor.arange(0)
+    runner_assert_eq(r, ar0.size, 0, "arange(0) is empty")
+    ar0.free()
+    mismatch_caught = 0
+    try
+        let bad_ar = tensor::Tensor.arange(-3)
+        bad_ar.free()
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "arange() throws on negative count")
+
+    let ars = tensor::Tensor.arange_step(0, 10, 3)
+    runner_assert_eq(r, ars.shape[0], 4, "arange_step(0,10,3) has 4 elements")
+    runner_assert_eq(r, ars.get_flat_int(3), 9, "arange_step last == 9 (stop exclusive)")
+    ars.free()
+    let ars2 = tensor::Tensor.arange_step(5, 0, -2)
+    runner_assert_eq(r, ars2.get_flat_int(0), 5, "negative step starts at start")
+    runner_assert_eq(r, ars2.get_flat_int(2), 1, "negative step descends")
+    runner_assert_eq(r, ars2.shape[0], 3, "arange_step(5,0,-2) has 3 elements")
+    ars2.free()
+    mismatch_caught = 0
+    try
+        let bad_step = tensor::Tensor.arange_step(0, 5, 0)
+        bad_step.free()
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "arange_step() throws on zero step")
+
+    let ls = tensor::Tensor.linspace(0.0, 1.0, 5)
+    runner_assert_eq(r, ls.shape[0], 5, "linspace(0,1,5) has 5 points")
+    runner_assert_eq(r, ls.get_flat(0), 0.0, "linspace starts at start")
+    runner_assert_eq(r, ls.get_flat(4), 1.0, "linspace ends at stop")
+    runner_assert_eq(r, ls.get_flat(2), 0.5, "linspace midpoint == 0.5")
+    ls.free()
+    let ls1 = tensor::Tensor.linspace(7.0, 7.0, 1)
+    runner_assert_eq(r, ls1.get_flat(0), 7.0, "linspace single point == start")
+    ls1.free()
+
+    let rn = tensor::Tensor.randn([400], 0)
+    runner_assert_eq(r, rn.size, 400, "randn([400]) has 400 elements")
+    runner_assert(r, rn.mean() > -0.5, "randn mean near 0 (lower)")
+    runner_assert(r, rn.mean() < 0.5, "randn mean near 0 (upper)")
+    runner_assert(r, rn.variance() > 0.5, "randn variance near 1 (lower)")
+    runner_assert(r, rn.variance() < 1.5, "randn variance near 1 (upper)")
+    rn.free()
+
+    # ═══════════════════════════════════════════════════════════════
+    # 17. Shape Manipulation (squeeze, permute, slice, concat, split)
+    # ═══════════════════════════════════════════════════════════════
+    let sq = tensor::Tensor.from_array([2, 1, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    let sq_v = sq.squeeze()
+    runner_assert_eq(r, len(sq_v.shape), 2, "squeeze() drops the size-1 dim")
+    runner_assert_eq(r, sq_v.shape[0], 2, "squeezed shape[0] == 2")
+    runner_assert_eq(r, sq_v.get([1, 2]), 6.0, "squeezed view reads correctly")
+
+    let us = sq_v.unsqueeze(1)
+    runner_assert_eq(r, len(us.shape), 3, "unsqueeze() restores rank 3")
+    runner_assert_eq(r, us.shape[1], 1, "unsqueezed dim == 1")
+    runner_assert_eq(r, us.get([1, 0, 2]), 6.0, "unsqueezed view reads correctly")
+    mismatch_caught = 0
+    try
+        let bad_us = sq_v.unsqueeze(9)
+        bad_us.free()
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "unsqueeze() throws on out-of-range dim")
+
+    let pm = tensor::Tensor.from_array([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    let pm_t = pm.permute([1, 0])
+    runner_assert_eq(r, pm_t.shape[0], 3, "permute swaps rows")
+    runner_assert_eq(r, pm_t.shape[1], 2, "permute swaps cols")
+    runner_assert_eq(r, pm_t.get_2d(2, 1), 6.0, "permute (2,1) == orig (1,2)")
+    runner_assert_eq(r, pm_t.to_array()[0], 1.0, "permute copy is contiguous (flat[0])")
+    runner_assert_eq(r, pm_t.to_array()[1], 4.0, "permute copy is contiguous (flat[1])")
+    pm_t.free()
+    mismatch_caught = 0
+    try
+        let bad_pm = pm.permute([0, 0])
+        bad_pm.free()
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "permute() throws on repeated axes")
+    pm.free()
+
+    let sl = tensor::Tensor.from_array([2, 4], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+    let sl_r = sl.slice(1, 1, 3)
+    runner_assert_eq(r, sl_r.shape[0], 2, "slice keeps rows")
+    runner_assert_eq(r, sl_r.shape[1], 2, "slice width == stop-start")
+    runner_assert_eq(r, sl_r.get_2d(0, 0), 2.0, "slice (0,0) == orig (0,1)")
+    runner_assert_eq(r, sl_r.get_2d(1, 1), 7.0, "slice (1,1) == orig (1,2)")
+    sl_r.free()
+    mismatch_caught = 0
+    try
+        let bad_sl = sl.slice(1, 2, 9)
+        bad_sl.free()
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "slice() throws on out-of-range bounds")
+    sl.free()
+
+    let c1 = tensor::Tensor.from_array([2, 2], [1.0, 2.0, 3.0, 4.0])
+    let c2 = tensor::Tensor.from_array([2, 2], [5.0, 6.0, 7.0, 8.0])
+    let cc = tensor::Tensor.concat([c1, c2], 0)
+    runner_assert_eq(r, cc.shape[0], 4, "concat rows == 2+2")
+    runner_assert_eq(r, cc.shape[1], 2, "concat cols unchanged")
+    runner_assert_eq(r, cc.get_2d(0, 0), 1.0, "concat head == c1")
+    runner_assert_eq(r, cc.get_2d(2, 0), 5.0, "concat tail == c2")
+    runner_assert_eq(r, cc.get_2d(3, 1), 8.0, "concat last == 8")
+    cc.free()
+    let st_k = tensor::Tensor.stack([c1, c2], 0)
+    runner_assert_eq(r, len(st_k.shape), 3, "stack() adds a dimension")
+    runner_assert_eq(r, st_k.shape[0], 2, "stacked dim == tensor count")
+    runner_assert_eq(r, st_k.get([0, 0, 0]), 1.0, "stack batch 0 == c1")
+    runner_assert_eq(r, st_k.get([1, 1, 1]), 8.0, "stack batch 1 == c2")
+    st_k.free()
+    c1.free()
+    c2.free()
+
+    let sp = tensor::Tensor.from_array([2, 4], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+    let chunks = sp.split(2, 1)
+    runner_assert_eq(r, len(chunks), 2, "split() returns 2 chunks")
+    let ch0: Tensor = chunks[0]
+    let ch1: Tensor = chunks[1]
+    runner_assert_eq(r, ch0.get_2d(0, 0), 1.0, "split head chunk correct")
+    runner_assert_eq(r, ch1.get_2d(0, 0), 3.0, "split tail chunk correct")
+    ch0.free()
+    ch1.free()
+    mismatch_caught = 0
+    try
+        let bad_sp = sp.split(3, 1)
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "split() throws on uneven division")
+    sp.free()
+    sq.free()
+
+    # ═══════════════════════════════════════════════════════════════
+    # 18. Exact Integer API (N-d access, integer export)
+    # ═══════════════════════════════════════════════════════════════
+    let gi = tensor::Tensor.from_array_int([2, 3], [1, 2, 3, 4, 5, 6], 2)
+    runner_assert_eq(r, gi.get_int([1, 2]), 6, "get_int() N-d read == 6")
+    gi.set_int([0, 0], 99)
+    runner_assert_eq(r, gi.get_int([0, 0]), 99, "set_int() N-d write sticks")
+    runner_assert_eq(r, gi.get_flat_int(0), 99, "set_int() visible via flat access")
+    gi.set_int([0, 0], 1)
+    let gi_arr = gi.to_array_int()
+    runner_assert_eq(r, len(gi_arr), 6, "to_array_int() exports 6 elements")
+    runner_assert_eq(r, gi_arr[0], 1, "to_array_int()[0] == 1")
+    runner_assert_eq(r, gi_arr[5], 6, "to_array_int()[5] == 6")
+    gi.free()
+
+    let g64 = tensor::Tensor.from_array_int([2], [9007199254740992, -7], 3)
+    let g64_arr = g64.to_array_int()
+    runner_assert_eq(r, g64_arr[0], 9007199254740992, "to_array_int() exact at 2^53")
+    runner_assert_eq(r, g64_arr[1], -7, "to_array_int() keeps negatives")
+    g64.free()
+
+    # ═══════════════════════════════════════════════════════════════
     # 7. Data Models & Configuration (types.alya)
     # ═══════════════════════════════════════════════════════════════
     let cfg = tensor::new_config(tensor::TensorDevice.SIMD, 0, 4)
