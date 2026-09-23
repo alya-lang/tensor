@@ -85,6 +85,34 @@ function main()
     m1_64.free()
     m2_64.free()
 
+    # 7. Element-wise Division 32x32
+    let d1 = tensor::Tensor.full([32, 32], 4.0)
+    let d2 = tensor::Tensor.full([32, 32], 2.0)
+    let n_div = 5000
+    bench_start(runner, n_div)
+    let d_idx = 0
+    while d_idx < n_div
+        let res = d1.div(d2)
+        res.free()
+        d_idx += 1
+    end
+    bench_stop(runner, "Tensor.div([32, 32])")
+    d1.free()
+    d2.free()
+
+    # 8. Transpose 32x32
+    let tp = tensor::Tensor.ones([32, 32])
+    let n_tp = 2000
+    bench_start(runner, n_tp)
+    let tp_idx = 0
+    while tp_idx < n_tp
+        let res = tp.transpose()
+        res.free()
+        tp_idx += 1
+    end
+    bench_stop(runner, "Tensor.transpose([32, 32])")
+    tp.free()
+
     bench_summary(runner)
 end
 

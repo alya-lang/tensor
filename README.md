@@ -13,11 +13,13 @@ High-performance N-dimensional Tensor engine with hardware-accelerated SIMD GEMM
 
 - ⚡ **SIMD Accelerated GEMM**: 4-wide unrolled matrix multiplication with FMA3/Neon hardware intrinsics
 - 🧠 **Cache-Aligned Memory**: 32-byte cache-line aligned raw memory buffers (`std/mem` aligned_alloc)
-- ➕ **Element-Wise Vector Ops**: Vectorized addition (`add`), subtraction (`sub`), Hadamard multiplication (`mul`), and scaling (`scale`)
-- 📊 **Fast Reductions**: Horizontal reduction summing (`sum`) and statistical operations
-- 🔄 **Zero-Copy Reshaping**: Stride-aware multidimensional views (`reshape`, `to_array`, `to_string`)
+- ➕ **Element-Wise Vector Ops**: Vectorized addition (`add`), subtraction (`sub`), Hadamard multiplication (`mul`), division (`div`), and scaling (`scale`) — all with strict shape checking
+- 📊 **Fast Reductions**: Horizontal reduction summing (`sum`) plus `mean`, `min`, and `max` statistics
+- 🔄 **Zero-Copy Reshaping**: Stride-aware multidimensional views (`reshape`, `flatten`, `to_array`, `to_string` with 2D matrix rendering)
+- 🔁 **Shape Algebra**: Contiguous `transpose`, deep `copy`, `full`/`eye` constructors, in-place `fill`, and `allclose` tolerance comparison
+- 🛡️ **Loud Shape Errors**: Element-wise mismatches and bad reshapes `throw` instead of silently producing garbage
 - 🔒 **Public/Private Visibility (`pub`)**: Strict encapsulation of memory internals and buffer pointers
-- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (42 assertions) and micro-benchmarks
+- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (82 assertions) and micro-benchmarks
 
 ---
 
@@ -30,11 +32,11 @@ tensor/
 │   ├── lib.alya            # Public API facade (Tensor struct, SIMD GEMM, element ops)
 │   ├── types.alya          # TensorDtype, TensorDevice, TensorConfig data models
 │   └── core/
-│       └── formatter.alya  # Vector string representation & formatting logic
+│       └── formatter.alya  # Vector & matrix string representation logic
 ├── examples/
 │   └── demo.alya           # Runnable usage examples
 ├── tests/
-│   └── test_basic.alya     # Automated test suite (42 assertions)
+│   └── test_basic.alya     # Automated test suite (82 assertions)
 └── benches/
     └── bench_basic.alya    # Micro-benchmarks (allocation, GEMM, reductions)
 ```
@@ -109,20 +111,34 @@ main()
 | `Tensor.zeros(shape)` | `pub function` | Creates a new Tensor initialized with all `0.0`. |
 | `Tensor.ones(shape)` | `pub function` | Creates a new Tensor initialized with all `1.0`. |
 | `Tensor.from_array(shape, arr)` | `pub function` | Creates a new Tensor initialized from a flat float array. |
+| `Tensor.full(shape, val)` | `pub function` | Creates a new Tensor with every element set to `val`. |
+| `Tensor.eye(n)` | `pub function` | Creates an n-by-n identity matrix. |
+| `Tensor.copy(self)` | `pub method` | Deep copy with a freshly allocated buffer (no aliasing). |
+| `Tensor.fill(self, val)` | `pub method` | Overwrites every element in place. |
 | `Tensor.matmul(self, other)` | `pub method` | SIMD-accelerated 2D GEMM matrix multiplication ($M \times K \times N$). |
 | `Tensor.add(self, other)` | `pub method` | Vectorized element-wise addition of two matching-shape tensors. |
 | `Tensor.sub(self, other)` | `pub method` | Vectorized element-wise subtraction of two matching-shape tensors. |
 | `Tensor.mul(self, other)` | `pub method` | Vectorized element-wise multiplication (Hadamard product). |
+| `Tensor.div(self, other)` | `pub method` | Vectorized element-wise division (IEEE-754 semantics on divide-by-zero). |
 | `Tensor.scale(self, factor)` | `pub method` | Multiplies all elements by a scalar float multiplier. |
 | `Tensor.sum(self)` | `pub method` | Computes horizontal scalar sum of all elements. |
+| `Tensor.mean(self)` | `pub method` | Computes the arithmetic mean of all elements. |
+| `Tensor.min(self)` | `pub method` | Finds the minimum element value. |
+| `Tensor.max(self)` | `pub method` | Finds the maximum element value. |
 | `Tensor.get_2d(self, row, col)` | `pub method` | Fast 2D matrix element access. |
 | `Tensor.set_2d(self, row, col, val)`| `pub method` | Fast 2D matrix element mutation. |
-| `Tensor.reshape(self, new_shape)` | `pub method` | Creates a reshaped view with updated dimension strides. |
+| `Tensor.reshape(self, new_shape)` | `pub method` | Creates a reshaped view with updated dimension strides. Throws on element-count mismatch. |
+| `Tensor.flatten(self)` | `pub method` | Returns a flattened rank-1 (`[size]`) view sharing the same buffer. |
+| `Tensor.transpose(self)` | `pub method` | Returns the 2D transpose as a new contiguous tensor. |
+| `Tensor.allclose(self, other, tol)` | `pub method` | Approximate element-wise equality within absolute tolerance `tol` (default `1e-9`); `false` on shape mismatch. |
 | `Tensor.to_array(self)` | `pub method` | Converts all tensor elements to a standard flat Alya float array. |
 | `Tensor.free(self)` | `pub method` | Releases 32-byte aligned buffer from heap memory. |
 | `TensorDtype` | `pub enum` | Supported numerical data types (`Float64`, `Float32`, `Int64`, `Int32`). |
-| `TensorDevice` | `pub enum` | Target execution device backend (`CPU`, `SIMD`, `GPU`). |
+| `TensorDevice` | `pub enum` | Target execution device backend (`CPU`, `SIMD`). |
 | `TensorConfig` | `pub struct` | Execution profile and threading configuration model. |
+
+> [!NOTE]
+> **Storage model:** tensor buffers always hold 64-bit floats (`Float64`). `TensorDtype`, `TensorDevice`, and `TensorConfig` are descriptive metadata for execution profiles — no alternate-dtype storage or GPU backend exists yet. Element-wise kernels require exactly matching shapes and `throw` on mismatch; `reshape` throws (instead of returning the input) when the element count differs.
 
 ---
 

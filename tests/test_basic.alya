@@ -123,6 +123,120 @@ function main()
     t_arr.free()
 
     # ═══════════════════════════════════════════════════════════════
+    # 8. Extended Constructors (full, eye, copy, fill)
+    # ═══════════════════════════════════════════════════════════════
+    let t_full = tensor::Tensor.full([2, 3], 7.5)
+    runner_assert_eq(r, t_full.size, 6, "Tensor.full size is 6")
+    runner_assert_eq(r, t_full.get_2d(0, 0), 7.5, "Tensor.full fills (0,0) with 7.5")
+    runner_assert_eq(r, t_full.get_2d(1, 2), 7.5, "Tensor.full fills (1,2) with 7.5")
+    t_full.fill(1.5)
+    runner_assert_eq(r, t_full.get_2d(0, 0), 1.5, "fill() overwrites (0,0) in place")
+    runner_assert_eq(r, t_full.sum(), 9.0, "fill() overwrites all 6 elements (6 * 1.5 = 9)")
+    t_full.free()
+
+    let t_eye = tensor::Tensor.eye(3)
+    runner_assert_eq(r, t_eye.get_2d(0, 0), 1.0, "eye diagonal (0,0) == 1.0")
+    runner_assert_eq(r, t_eye.get_2d(1, 1), 1.0, "eye diagonal (1,1) == 1.0")
+    runner_assert_eq(r, t_eye.get_2d(2, 2), 1.0, "eye diagonal (2,2) == 1.0")
+    runner_assert_eq(r, t_eye.get_2d(0, 1), 0.0, "eye off-diagonal (0,1) == 0.0")
+    runner_assert_eq(r, t_eye.get_2d(2, 0), 0.0, "eye off-diagonal (2,0) == 0.0")
+    runner_assert_eq(r, t_eye.sum(), 3.0, "eye(3) sums to 3.0")
+
+    let t_eye_copy = t_eye.copy()
+    t_eye_copy.set_2d(0, 0, 99.0)
+    runner_assert_eq(r, t_eye_copy.get_2d(0, 0), 99.0, "copy() is mutable independently")
+    runner_assert_eq(r, t_eye.get_2d(0, 0), 1.0, "copy() shares no buffer with the original")
+    runner_assert_true(r, t_eye.allclose(t_eye) == true, "allclose() is reflexive")
+    runner_assert_true(r, t_eye.allclose(t_eye_copy) == false, "allclose() detects the mutated copy beyond default epsilon")
+    runner_assert_true(r, t_eye.allclose(t_eye_copy, 100.0) == true, "allclose() passes within wide tolerance")
+    let t_other_shape = tensor::Tensor.zeros([2, 2])
+    runner_assert_true(r, t_eye.allclose(t_other_shape) == false, "allclose() returns false on shape mismatch")
+    t_eye_copy.free()
+    t_other_shape.free()
+    t_eye.free()
+
+    # ═══════════════════════════════════════════════════════════════
+    # 9. Division, Statistics & Transpose
+    # ═══════════════════════════════════════════════════════════════
+    let t_num = tensor::Tensor.from_array([2, 2], [4.0, 9.0, 2.0, 8.0])
+    let t_den = tensor::Tensor.from_array([2, 2], [2.0, 3.0, 2.0, 4.0])
+    let t_div = t_num.div(t_den)
+    runner_assert_eq(r, t_div.get_2d(0, 0), 2.0, "div() (0,0) == 4/2")
+    runner_assert_eq(r, t_div.get_2d(0, 1), 3.0, "div() (0,1) == 9/3")
+    runner_assert_eq(r, t_div.get_2d(1, 1), 2.0, "div() (1,1) == 8/4")
+    t_div.free()
+
+    runner_assert_eq(r, t_num.sum(), 23.0, "sum() == 4+9+2+8")
+    runner_assert_eq(r, t_num.mean(), 5.75, "mean() == 23/4")
+    runner_assert_eq(r, t_num.min(), 2.0, "min() == 2.0")
+    runner_assert_eq(r, t_num.max(), 9.0, "max() == 9.0")
+
+    let t_t = t_num.transpose()
+    runner_assert_eq(r, t_t.shape[0], 2, "transpose rows == orig cols")
+    runner_assert_eq(r, t_t.shape[1], 2, "transpose cols == orig rows")
+    runner_assert_eq(r, t_t.get_2d(0, 1), 2.0, "transpose (0,1) == orig (1,0)")
+    runner_assert_eq(r, t_t.get_2d(1, 0), 9.0, "transpose (1,0) == orig (0,1)")
+    let t_tt = t_t.transpose()
+    runner_assert_true(r, t_tt.allclose(t_num) == true, "double transpose restores the original")
+    t_t.free()
+    t_tt.free()
+
+    let t_rect = tensor::Tensor.from_array([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    let t_rect_t = t_rect.transpose()
+    runner_assert_eq(r, t_rect_t.shape[0], 3, "rect transpose rows == 3")
+    runner_assert_eq(r, t_rect_t.shape[1], 2, "rect transpose cols == 2")
+    runner_assert_eq(r, t_rect_t.get_2d(2, 1), 6.0, "rect transpose (2,1) == orig (1,2)")
+    let t_flat = t_rect.flatten()
+    runner_assert_eq(r, len(t_flat.shape), 1, "flatten() returns a rank-1 view")
+    runner_assert_eq(r, t_flat.shape[0], 6, "flatten() shape == [size]")
+    runner_assert_eq(r, t_flat.get_flat(5), 6.0, "flatten() preserves element order")
+    t_rect_t.free()
+    t_num.free()
+    t_den.free()
+    t_rect.free()
+
+    # ═══════════════════════════════════════════════════════════════
+    # 10. 2D Formatting
+    # ═══════════════════════════════════════════════════════════════
+    let t_fmt = tensor::Tensor.from_array([2, 2], [1.0, 2.0, 3.0, 4.0])
+    let fmt_2d = t_fmt.to_string()
+    runner_assert_str_eq(r, fmt_2d, "[[1, 2], [3, 4]]", "2D to_string() renders matrix rows")
+    t_fmt.free()
+    let t_fmt1d = tensor::Tensor.from_array([3], [1.0, 2.0, 3.0])
+    runner_assert_str_eq(r, t_fmt1d.to_string(), "[1, 2, 3]", "1D to_string() keeps flat rendering")
+    t_fmt1d.free()
+
+    # ═══════════════════════════════════════════════════════════════
+    # 11. Shape-Mismatch Errors
+    # ═══════════════════════════════════════════════════════════════
+    let t_a = tensor::Tensor.ones([2, 3])
+    let t_b = tensor::Tensor.ones([3, 2])
+    let mismatch_caught = 0
+    try
+        let bad = t_a.add(t_b)
+        bad.free()
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "add() throws on shape mismatch (same size, different shape)")
+    mismatch_caught = 0
+    try
+        let bad_reshape = t_a.reshape([2, 2])
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "reshape() throws on element-count mismatch")
+    mismatch_caught = 0
+    try
+        let bad_mm = t_a.matmul(t_a)
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "matmul() throws on inner-dimension mismatch")
+    t_a.free()
+    t_b.free()
+
+    # ═══════════════════════════════════════════════════════════════
     # 7. Data Models & Configuration (types.alya)
     # ═══════════════════════════════════════════════════════════════
     let cfg = tensor::new_config(tensor::TensorDevice.SIMD, 0, 4)

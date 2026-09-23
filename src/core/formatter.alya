@@ -19,3 +19,31 @@ pub function format_vector(data_ptr: ptr, count: int) -> string
     res += "]"
     return res
 end
+
+## Formats a 2D tensor into a multi-row matrix representation.
+##
+## Assumes contiguous row-major layout, which every constructor in this
+## engine guarantees (`transpose` returns a contiguous copy, never a view).
+pub function format_matrix(data_ptr: ptr, rows: int, cols: int) -> string
+    let res = "["
+    let i: int = 0
+    while i < rows
+        if i > 0
+            res += ", "
+        end
+        res += "["
+        let j: int = 0
+        while j < cols
+            let val: float = read_float(data_ptr, (i * cols + j) * 8)
+            res += str(val)
+            if j + 1 < cols
+                res += ", "
+            end
+            j += 1
+        end
+        res += "]"
+        i += 1
+    end
+    res += "]"
+    return res
+end

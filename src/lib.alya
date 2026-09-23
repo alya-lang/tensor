@@ -1,7 +1,8 @@
 ## Tensor Engine Library Facade
 ##
 ## Part of the Alya Language package ecosystem (https://github.com/alya-lang).
-## High-performance N-D Tensor manipulation, SIMD GEMM matrix multiplication, and broadcasting.
+## High-performance N-D Tensor manipulation, SIMD GEMM matrix multiplication,
+## element-wise kernels, reductions, and shape views.
 
 import "std/mem"
 import "std/simd"
@@ -72,6 +73,42 @@ pub function compute_size(shape: array) -> int
     return total
 end
 
+## Compares two shape arrays element-wise.
+##
+## ### Parameters
+## - `a`: First shape array.
+## - `b`: Second shape array.
+##
+## ### Returns
+## `true` when both shapes have identical rank and dimension sizes.
+function shapes_equal_shape(a: array, b: array) -> bool
+    if len(a) != len(b)
+        return false
+    end
+    let i: int = 0
+    let n: int = len(a)
+    while i < n
+        let da: int = a[i]
+        let db: int = b[i]
+        if da != db
+            return false
+        end
+        i += 1
+    end
+    return true
+end
+
+## Throws unless two tensors share identical shapes.
+##
+## Element-wise kernels (`add`, `sub`, `mul`, `div`) require exact shape
+## agreement: same element count with different shapes would silently
+## produce transposed garbage, so the mismatch is rejected loudly.
+function assert_same_shape(a: Tensor, b: Tensor)
+    if shapes_equal_shape(a.shape, b.shape) == false
+        throw "Tensor shape mismatch for element-wise operation"
+    end
+end
+
 ## Allocates an uninitialized Tensor of the given shape with 32-byte cache-line alignment.
 pub function Tensor.new(shape) -> Tensor
     let total_elems: int = compute_size(shape)
@@ -138,6 +175,58 @@ pub function Tensor.from_array(shape: array, arr: array) -> Tensor
     return t
 end
 
+## Creates a Tensor with every element set to a fill value.
+##
+## ### Parameters
+## - `shape`: Dimension size array.
+## - `val`: Fill value written to every element.
+##
+## ### Returns
+## The initialized `Tensor` instance.
+pub function Tensor.full(shape: array, val: float) -> Tensor
+    let t = Tensor.new(shape)
+    t.fill(val)
+    return t
+end
+
+## Creates an n-by-n identity matrix (1.0 on the diagonal, 0.0 elsewhere).
+##
+## ### Parameters
+## - `n`: Row and column count of the square matrix.
+##
+## ### Returns
+## The initialized `Tensor` instance with shape `[n, n]`.
+pub function Tensor.eye(n: int) -> Tensor
+    let t = Tensor.zeros([n, n])
+    let i: int = 0
+    while i < n
+        t.set_2d(i, i, 1.0)
+        i += 1
+    end
+    return t
+end
+
+## Creates a deep copy with its own freshly allocated buffer.
+##
+## The copy shares nothing with the original: mutating one never affects
+## the other (unlike `reshape`, which returns an aliased view).
+##
+## ### Parameters
+## - `self`: The source `Tensor` instance.
+##
+## ### Returns
+## An independent `Tensor` with identical shape and contents.
+pub function Tensor.copy(self: Tensor) -> Tensor
+    let res = Tensor.new(self.shape)
+    let total: int = self.size
+    let i: int = 0
+    while i < total
+        res.set_flat(i, self.get_flat(i))
+        i += 1
+    end
+    return res
+end
+
 ## Direct flat element access.
 pub function Tensor.get_flat(self: Tensor, idx: int) -> float
     return read_float(self.data, idx * 8)
@@ -146,6 +235,20 @@ end
 ## Direct flat element update.
 pub function Tensor.set_flat(self: Tensor, idx: int, val: float)
     write_float(self.data, idx * 8, val)
+end
+
+## Overwrites every element of the tensor in place.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `val`: Fill value written to every element.
+pub function Tensor.fill(self: Tensor, val: float)
+    let total: int = self.size
+    let i: int = 0
+    while i < total
+        self.set_flat(i, val)
+        i += 1
+    end
 end
 
 ## Fast 2D matrix element access.
@@ -254,6 +357,7 @@ end
 
 ## Element-wise addition of two identically-shaped tensors (4-wide unrolled).
 pub function Tensor.add(self: Tensor, other: Tensor) -> Tensor
+    assert_same_shape(self, other)
     let res = Tensor.new(self.shape)
     let total: int = self.size
     let i: int = 0
@@ -284,6 +388,7 @@ end
 
 ## Element-wise subtraction of two identically-shaped tensors (4-wide unrolled).
 pub function Tensor.sub(self: Tensor, other: Tensor) -> Tensor
+    assert_same_shape(self, other)
     let res = Tensor.new(self.shape)
     let total: int = self.size
     let i: int = 0
@@ -314,6 +419,7 @@ end
 
 ## Element-wise multiplication of two identically-shaped tensors (4-wide unrolled Hadamard product).
 pub function Tensor.mul(self: Tensor, other: Tensor) -> Tensor
+    assert_same_shape(self, other)
     let res = Tensor.new(self.shape)
     let total: int = self.size
     let i: int = 0
@@ -337,6 +443,40 @@ pub function Tensor.mul(self: Tensor, other: Tensor) -> Tensor
         let a_val: float = self.get_flat(i)
         let b_val: float = other.get_flat(i)
         res.set_flat(i, a_val * b_val)
+        i += 1
+    end
+    return res
+end
+
+## Element-wise division of two identically-shaped tensors (4-wide unrolled).
+##
+## Shapes must match exactly; a mismatch throws. Division by zero follows
+## IEEE-754 float semantics (`inf` / `-inf` / `nan`).
+pub function Tensor.div(self: Tensor, other: Tensor) -> Tensor
+    assert_same_shape(self, other)
+    let res = Tensor.new(self.shape)
+    let total: int = self.size
+    let i: int = 0
+    let unroll_limit: int = total - 3
+    while i < unroll_limit
+        let a0: float = self.get_flat(i)
+        let b0: float = other.get_flat(i)
+        let a1: float = self.get_flat(i + 1)
+        let b1: float = other.get_flat(i + 1)
+        let a2: float = self.get_flat(i + 2)
+        let b2: float = other.get_flat(i + 2)
+        let a3: float = self.get_flat(i + 3)
+        let b3: float = other.get_flat(i + 3)
+        res.set_flat(i, a0 / b0)
+        res.set_flat(i + 1, a1 / b1)
+        res.set_flat(i + 2, a2 / b2)
+        res.set_flat(i + 3, a3 / b3)
+        i += 4
+    end
+    while i < total
+        let a_val: float = self.get_flat(i)
+        let b_val: float = other.get_flat(i)
+        res.set_flat(i, a_val / b_val)
         i += 1
     end
     return res
@@ -377,9 +517,52 @@ pub function Tensor.sum(self: Tensor) -> float
     return total_sum
 end
 
+## Computes the arithmetic mean of all elements in the tensor.
+pub function Tensor.mean(self: Tensor) -> float
+    if self.size == 0
+        throw "Cannot compute mean of an empty tensor"
+    end
+    return self.sum() / self.size
+end
+
+## Finds the minimum element value in the tensor.
+pub function Tensor.min(self: Tensor) -> float
+    if self.size == 0
+        throw "Cannot compute min of an empty tensor"
+    end
+    let best: float = self.get_flat(0)
+    let i: int = 1
+    while i < self.size
+        let v: float = self.get_flat(i)
+        if v < best
+            best = v
+        end
+        i += 1
+    end
+    return best
+end
+
+## Finds the maximum element value in the tensor.
+pub function Tensor.max(self: Tensor) -> float
+    if self.size == 0
+        throw "Cannot compute max of an empty tensor"
+    end
+    let best: float = self.get_flat(0)
+    let i: int = 1
+    while i < self.size
+        let v: float = self.get_flat(i)
+        if v > best
+            best = v
+        end
+        i += 1
+    end
+    return best
+end
+
 ## Returns a new Tensor view with a reshaped dimension configuration.
 ##
-## Returns the original tensor unchanged when the element count differs.
+## Throws when the element count differs: silently returning the original
+## tensor would propagate a wrong shape downstream.
 ##
 ## ### Parameters
 ## - `self`: The target `Tensor` instance.
@@ -390,10 +573,51 @@ end
 pub function Tensor.reshape(self: Tensor, new_shape: array) -> Tensor
     let new_size: int = compute_size(new_shape)
     if new_size != self.size
-        return self
+        throw "Cannot reshape tensor: element count mismatch"
     end
     let new_strides = compute_strides(new_shape)
     return Tensor { shape: new_shape, strides: new_strides, size: new_size, data: self.data }
+end
+
+## Returns a flattened 1D view of the tensor.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+##
+## ### Returns
+## A `[size]`-shaped `Tensor` view sharing the same buffer.
+pub function Tensor.flatten(self: Tensor) -> Tensor
+    return self.reshape([self.size])
+end
+
+## Returns the 2D transpose of the tensor as a new contiguous tensor.
+##
+## Only 2D tensors can be transposed; anything else throws. The result
+## owns a freshly allocated buffer in row-major order (not a strided
+## view), so flat element-wise kernels keep working on it.
+##
+## ### Parameters
+## - `self`: The target rank-2 `Tensor` instance.
+##
+## ### Returns
+## A new `[cols, rows]`-shaped `Tensor`.
+pub function Tensor.transpose(self: Tensor) -> Tensor
+    if len(self.shape) != 2
+        throw "Tensor.transpose requires a 2D tensor"
+    end
+    let rows: int = self.shape[0]
+    let cols: int = self.shape[1]
+    let res = Tensor.new([cols, rows])
+    let i: int = 0
+    while i < rows
+        let j: int = 0
+        while j < cols
+            res.set_2d(j, i, self.get_2d(i, j))
+            j += 1
+        end
+        i += 1
+    end
+    return res
 end
 
 ## Converts all tensor elements to a standard flat Alya float array.
@@ -415,8 +639,44 @@ pub function Tensor.to_array(self: Tensor) -> array
     return arr
 end
 
+## Element-wise approximate equality within an absolute tolerance.
+##
+## Returns `false` (rather than throwing) when shapes differ, so it can be
+## used directly as a test predicate.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `other`: The comparison `Tensor` instance.
+## - `tol`: Maximum allowed absolute element difference.
+##
+## ### Returns
+## `true` when shapes match and every element pair is within `tol`.
+pub function Tensor.allclose(self: Tensor, other: Tensor, tol: float = 0.000000001) -> bool
+    if shapes_equal_shape(self.shape, other.shape) == false
+        return false
+    end
+    let total: int = self.size
+    let i: int = 0
+    while i < total
+        let d: float = self.get_flat(i) - other.get_flat(i)
+        if d < 0.0
+            d = -d
+        end
+        if d > tol
+            return false
+        end
+        i += 1
+    end
+    return true
+end
+
 ## Formats the tensor using the internal formatter.
 pub function Tensor.to_string(self: Tensor) -> string
+    if len(self.shape) == 2
+        let rows: int = self.shape[0]
+        let cols: int = self.shape[1]
+        return format_matrix(self.data, rows, cols)
+    end
     return format_vector(self.data, self.size)
 end
 
