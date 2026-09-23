@@ -7,6 +7,7 @@
 import "std/mem"
 import "std/simd"
 import "std/math"
+import "std/str"
 import "./types.alya"
 import "./core/formatter.alya"
 import "./core/device.alya"
@@ -619,6 +620,203 @@ pub function Tensor.eye(n: int, dtype: int = 0) -> Tensor
         i += 1
     end
     return t
+end
+
+## Creates a zero tensor matching a reference tensor's shape, dtype, and device.
+##
+## ### Parameters
+## - `ref`: Reference `Tensor` instance (shape/dtype/device source; data ignored).
+##
+## ### Returns
+## The initialized `Tensor` instance.
+pub function Tensor.zeros_like(ref: Tensor) -> Tensor
+    let t = Tensor.zeros(ref.shape, ref.dtype)
+    let placed = t.to(ref.device_id)
+    t.free()
+    return placed
+end
+
+## Creates a ones tensor matching a reference tensor's shape, dtype, and device.
+##
+## Placement follows the reference tensor.
+##
+## ### Parameters
+## - `ref`: Reference `Tensor` instance (shape/dtype/device source; data ignored).
+##
+## ### Returns
+## The initialized `Tensor` instance.
+pub function Tensor.ones_like(ref: Tensor) -> Tensor
+    let t = Tensor.ones(ref.shape, ref.dtype)
+    let placed = t.to(ref.device_id)
+    t.free()
+    return placed
+end
+
+## Creates a filled tensor matching a reference tensor's shape, dtype, and device.
+##
+## Placement follows the reference tensor.
+##
+## ### Parameters
+## - `ref`: Reference `Tensor` instance (shape/dtype/device source; data ignored).
+## - `val`: Fill value (converts to storage dtype).
+##
+## ### Returns
+## The initialized `Tensor` instance.
+pub function Tensor.full_like(ref: Tensor, val: float) -> Tensor
+    let t = Tensor.full(ref.shape, val, ref.dtype)
+    let placed = t.to(ref.device_id)
+    t.free()
+    return placed
+end
+
+## Builds an n-by-n diagonal matrix from a rank-1 tensor.
+##
+## ### Parameters
+## - `self`: Rank-1 `Tensor` with `n` diagonal elements.
+##
+## ### Returns
+## A new `[n, n]`-shaped `Tensor` with the elements on the main diagonal.
+##
+## ### Throws
+## Non-rank-1 input.
+pub function Tensor.diag(self: Tensor) -> Tensor
+    if len(self.shape) != 1
+        throw "Tensor.diag requires a rank-1 tensor"
+    end
+    let n: int = self.shape[0]
+    let res = Tensor.zeros([n, n], self.dtype)
+    let placed = res.to(self.device_id)
+    res.free()
+    let i: int = 0
+    while i < n
+        placed.set_2d(i, i, self.get_flat(i))
+        i += 1
+    end
+    return placed
+end
+
+## Extracts the main diagonal of a 2D tensor as a rank-1 copy.
+##
+## For rectangular matrices the diagonal runs `min(rows, cols)` elements.
+##
+## ### Parameters
+## - `self`: Rank-2 `Tensor` instance.
+##
+## ### Returns
+## A new 1D `Tensor` holding the diagonal elements.
+##
+## ### Throws
+## Non-2D input.
+pub function Tensor.diagonal(self: Tensor) -> Tensor
+    if len(self.shape) != 2
+        throw "Tensor.diagonal requires a 2D tensor"
+    end
+    let rows: int = self.shape[0]
+    let cols: int = self.shape[1]
+    let n: int = rows
+    if cols < n
+        n = cols
+    end
+    let res = Tensor.new([n], self.dtype, self.device_id)
+    if dtype_is_int(self.dtype)
+        let i: int = 0
+        while i < n
+            res.set_flat_int(i, self.get_flat_int(i * self.strides[0] + i * self.strides[1]))
+            i += 1
+        end
+        return res
+    end
+    let j: int = 0
+    while j < n
+        res.set_flat(j, self.get_2d(j, j))
+        j += 1
+    end
+    return res
+end
+
+## Returns the upper triangle (main diagonal and above) as a new tensor.
+##
+## Elements below diagonal `k` become zero. Follows NumPy offset semantics:
+## `k = 0` keeps the main diagonal, `k = 1` starts above it.
+##
+## ### Parameters
+## - `self`: Rank-2 `Tensor` instance.
+## - `k`: Diagonal offset.
+##
+## ### Returns
+## A new `[rows, cols]`-shaped `Tensor`.
+##
+## ### Throws
+## Non-2D input.
+pub function Tensor.triu(self: Tensor, k: int = 0) -> Tensor
+    if len(self.shape) != 2
+        throw "Tensor.triu requires a 2D tensor"
+    end
+    let res = self.copy()
+    let rows: int = self.shape[0]
+    let cols: int = self.shape[1]
+    let is_int: int = 0
+    if dtype_is_int(self.dtype)
+        is_int = 1
+    end
+    let i: int = 0
+    while i < rows
+        let j: int = 0
+        while j < cols
+            if j - i < k
+                if is_int == 1
+                    res.set_flat_int(i * res.strides[0] + j * res.strides[1], 0)
+                else
+                    res.set_flat(i * res.strides[0] + j * res.strides[1], 0.0)
+                end
+            end
+            j += 1
+        end
+        i += 1
+    end
+    return res
+end
+
+## Returns the lower triangle (main diagonal and below) as a new tensor.
+##
+## Elements above diagonal `k` become zero (NumPy offset semantics).
+##
+## ### Parameters
+## - `self`: Rank-2 `Tensor` instance.
+## - `k`: Diagonal offset.
+##
+## ### Returns
+## A new `[rows, cols]`-shaped `Tensor`.
+##
+## ### Throws
+## Non-2D input.
+pub function Tensor.tril(self: Tensor, k: int = 0) -> Tensor
+    if len(self.shape) != 2
+        throw "Tensor.tril requires a 2D tensor"
+    end
+    let res = self.copy()
+    let rows: int = self.shape[0]
+    let cols: int = self.shape[1]
+    let is_int: int = 0
+    if dtype_is_int(self.dtype)
+        is_int = 1
+    end
+    let i: int = 0
+    while i < rows
+        let j: int = 0
+        while j < cols
+            if j - i > k
+                if is_int == 1
+                    res.set_flat_int(i * res.strides[0] + j * res.strides[1], 0)
+                else
+                    res.set_flat(i * res.strides[0] + j * res.strides[1], 0.0)
+                end
+            end
+            j += 1
+        end
+        i += 1
+    end
+    return res
 end
 
 ## Creates a deep copy with its own freshly allocated buffer.
@@ -1845,6 +2043,191 @@ pub function Tensor.argmax(self: Tensor) -> int
     return best_j
 end
 
+## Merges two sorted index runs `[lo, mid)` + `[mid, hi)` by tensor value.
+## Takes the left run on ties (stable); NaN order is unspecified.
+function mergesort_index_step(t: Tensor, idx: Tensor, tmp: Tensor, n: int, width: int, is_int: int)
+    let lo: int = 0
+    while lo < n
+        let mid: int = lo + width
+        if mid > n
+            mid = n
+        end
+        let hi: int = lo + width * 2
+        if hi > n
+            hi = n
+        end
+        let a: int = lo
+        let b: int = mid
+        let k: int = lo
+        while a < mid and b < hi
+            let take_b: int = 0
+            if is_int == 1
+                if t.get_flat_int(idx.get_flat_int(b)) < t.get_flat_int(idx.get_flat_int(a))
+                    take_b = 1
+                end
+            else
+                if t.get_flat(idx.get_flat_int(b)) < t.get_flat(idx.get_flat_int(a))
+                    take_b = 1
+                end
+            end
+            if take_b == 1
+                tmp.set_flat_int(k, idx.get_flat_int(b))
+                b += 1
+            else
+                tmp.set_flat_int(k, idx.get_flat_int(a))
+                a += 1
+            end
+            k += 1
+        end
+        while a < mid
+            tmp.set_flat_int(k, idx.get_flat_int(a))
+            a += 1
+            k += 1
+        end
+        while b < hi
+            tmp.set_flat_int(k, idx.get_flat_int(b))
+            b += 1
+            k += 1
+        end
+        let c: int = lo
+        while c < hi
+            idx.set_flat_int(c, tmp.get_flat_int(c))
+            c += 1
+        end
+        lo = hi
+    end
+end
+
+## Returns ascending sort positions as an Int32 index tensor.
+##
+## Bottom-up mergesort over flat positions (stable; integer storage
+## compares exactly). Empty tensors yield an empty index tensor.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+##
+## ### Returns
+## A rank-1 Int32 `Tensor` of flat indices that would sort the elements.
+pub function Tensor.argsort(self: Tensor) -> Tensor
+    let n: int = self.size
+    let idx = Tensor.new([n], 2, self.device_id)
+    let i: int = 0
+    while i < n
+        idx.set_flat_int(i, i)
+        i += 1
+    end
+    let tmp = Tensor.new([n], 2, self.device_id)
+    let is_int: int = 0
+    if dtype_is_int(self.dtype)
+        is_int = 1
+    end
+    let width: int = 1
+    while width < n
+        mergesort_index_step(self, idx, tmp, n, width, is_int)
+        width *= 2
+    end
+    tmp.free()
+    return idx
+end
+
+## Returns all elements sorted ascending as a rank-1 tensor.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+##
+## ### Returns
+## A new 1D `Tensor` with the sorted values.
+pub function Tensor.sort(self: Tensor) -> Tensor
+    let order = self.argsort()
+    let res = Tensor.new([self.size], self.dtype, self.device_id)
+    if dtype_is_int(self.dtype)
+        let i: int = 0
+        while i < self.size
+            res.set_flat_int(i, self.get_flat_int(order.get_flat_int(i)))
+            i += 1
+        end
+        order.free()
+        return res
+    end
+    let j: int = 0
+    while j < self.size
+        res.set_flat(j, self.get_flat(order.get_flat_int(j)))
+        j += 1
+    end
+    order.free()
+    return res
+end
+
+## Returns the `k` largest values, sorted descending, as a rank-1 tensor.
+##
+## Pair with `argsort` when positions are needed.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `k`: Value count (`0 <= k <= size`).
+##
+## ### Returns
+## A new 1D `Tensor` with the top-`k` values in descending order.
+##
+## ### Throws
+## `k` outside `0..=size`.
+pub function Tensor.topk(self: Tensor, k: int) -> Tensor
+    if k < 0 or k > self.size
+        throw "Tensor.topk requires 0 <= k <= size"
+    end
+    let order = self.argsort()
+    let res = Tensor.new([k], self.dtype, self.device_id)
+    if dtype_is_int(self.dtype)
+        let i: int = 0
+        while i < k
+            res.set_flat_int(i, self.get_flat_int(order.get_flat_int(self.size - 1 - i)))
+            i += 1
+        end
+        order.free()
+        return res
+    end
+    let j: int = 0
+    while j < k
+        res.set_flat(j, self.get_flat(order.get_flat_int(self.size - 1 - j)))
+        j += 1
+    end
+    order.free()
+    return res
+end
+
+## Returns flat-order prefix sums with the same shape as the input.
+##
+## Result element `i` holds the sum of flat elements `0..=i`. Integer
+## storage accumulates exactly (overflow wraps, C-style).
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+##
+## ### Returns
+## A new `Tensor` with cumulative sums.
+pub function Tensor.cumsum(self: Tensor) -> Tensor
+    let res = Tensor.new(self.shape, self.dtype, self.device_id)
+    let total: int = self.size
+    if dtype_is_int(self.dtype)
+        let acc = 0
+        let i: int = 0
+        while i < total
+            acc += self.get_flat_int(i)
+            res.set_flat_int(i, acc)
+            i += 1
+        end
+        return res
+    end
+    let running: float = 0.0
+    let j: int = 0
+    while j < total
+        running += self.get_flat(j)
+        res.set_flat(j, running)
+        j += 1
+    end
+    return res
+end
+
 ## Returns a new Tensor view with a reshaped dimension configuration.
 ##
 ## ### Parameters
@@ -2347,6 +2730,115 @@ pub function Tensor.to_array_int(self: Tensor) -> array
         i += 1
     end
     return arr
+end
+
+## Reads one element as raw storage bits (sign ignored, low bits exact).
+## The text serializer stores these integers, so every dtype round-trips
+## bit-exactly without float formatting loss.
+function tensor_read_bits(data: ptr, idx: int, dtype: int)
+    when dtype
+        is 1 then return read_i32(data, idx * 4)
+        is 2 then return read_i32(data, idx * 4)
+        else return read_int(data, idx * 8)
+    end
+end
+
+## Writes one element from raw storage bits (low bits stored verbatim).
+function tensor_write_bits(data: ptr, idx: int, dtype: int, bits)
+    when dtype
+        is 1 then write_i32(data, idx * 4, bits)
+        is 2 then write_i32(data, idx * 4, bits)
+        else write_int(data, idx * 8, bits)
+    end
+end
+
+## Returns the text after a required line prefix, or throws.
+function after_prefix(line: string, prefix: string) -> string
+    if starts_with(line, prefix) == 0
+        throw "Tensor.load found a malformed header line"
+    end
+    return substring(line, len(prefix), len(line) - len(prefix))
+end
+
+## Serializes the tensor to a text file (bit-exact round-trip).
+##
+## Line-oriented `ALYA-TENSOR-1` format: magic, dtype, device, rank, one
+## `dim` line per dimension, a `data` marker, then one raw-bit integer per
+## element. Floats travel as integer bit patterns (never `%g`), so every
+## dtype — including Int64 and subnormals — round-trips exactly.
+##
+## ### Parameters
+## - `self`: The target `Tensor` instance.
+## - `path`: Destination file path.
+##
+## ### Returns
+## Integer result from the file write operation.
+pub function Tensor.save(self: Tensor, path: string) -> int
+    let out = "ALYA-TENSOR-1\n"
+    out += "dtype " + str(self.dtype) + "\n"
+    out += "device " + str(self.device_id) + "\n"
+    out += "rank " + str(len(self.shape)) + "\n"
+    let d: int = 0
+    while d < len(self.shape)
+        out += "dim " + str(self.shape[d]) + "\n"
+        d += 1
+    end
+    out += "data\n"
+    let i: int = 0
+    while i < self.size
+        out += str(tensor_read_bits(self.data, i, self.dtype)) + "\n"
+        i += 1
+    end
+    return write_file(path, out)
+end
+
+## Loads a tensor serialized by `save` (bit-exact round-trip).
+##
+## ### Parameters
+## - `path`: Source file path.
+##
+## ### Returns
+## The deserialized `Tensor` instance (shape, dtype, device, and bits).
+##
+## ### Throws
+## Unknown magic, malformed header, or element-count mismatch.
+pub function Tensor.load(path: string) -> Tensor
+    let rows = lines(read_file(path))
+    if len(rows) < 5
+        throw "Tensor.load rejects truncated files (expected ALYA-TENSOR-1)"
+    end
+    if rows[0] != "ALYA-TENSOR-1"
+        throw "Tensor.load rejects unknown magic (expected ALYA-TENSOR-1)"
+    end
+    let dtype: int = int(after_prefix(rows[1], "dtype "))
+    let device: int = int(after_prefix(rows[2], "device "))
+    let rank: int = int(after_prefix(rows[3], "rank "))
+    let shape = []
+    let d: int = 0
+    while d < rank
+        shape.push(int(after_prefix(rows[4 + d], "dim ")))
+        d += 1
+    end
+    if rows[4 + rank] != "data"
+        throw "Tensor.load found a malformed header (expected data marker)"
+    end
+    let t = Tensor.new(shape, dtype, device)
+    let got: int = 0
+    let r: int = 5 + rank
+    while r < len(rows)
+        if len(rows[r]) > 0
+            if got >= t.size
+                throw "Tensor.load found more elements than the header shape holds"
+            end
+            tensor_write_bits(t.data, got, dtype, int(rows[r]))
+            got += 1
+        end
+        r += 1
+    end
+    if got != t.size
+        throw "Tensor.load element count mismatch against the header shape"
+    end
+    return t
 end
 
 ## Element-wise approximate equality within an absolute tolerance.

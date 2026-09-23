@@ -728,6 +728,144 @@ function main()
     g64.free()
 
     # ═══════════════════════════════════════════════════════════════
+    # 19. Like-Constructors, Triangular Matrices & Digestive Reductions
+    # ═══════════════════════════════════════════════════════════════
+    let lk = tensor::Tensor.from_array([2, 2], [1.0, 2.0, 3.0, 4.0])
+    let lk_z = tensor::Tensor.zeros_like(lk)
+    runner_assert_eq(r, lk_z.sum(), 0.0, "zeros_like() sums to 0")
+    runner_assert_eq(r, lk_z.shape[0], 2, "zeros_like() copies shape")
+    lk_z.free()
+    let lk_o = tensor::Tensor.ones_like(lk)
+    runner_assert_eq(r, lk_o.sum(), 4.0, "ones_like() sums to 4")
+    lk_o.free()
+    let lk_f = tensor::Tensor.full_like(lk, 2.5)
+    runner_assert_eq(r, lk_f.get_2d(1, 1), 2.5, "full_like() fills 2.5")
+    lk_f.free()
+    let lk_i = tensor::Tensor.from_array_int([2], [3, 4], 2)
+    let lk_if = tensor::Tensor.full_like(lk_i, 7.0)
+    runner_assert_eq(r, lk_if.dtype, 2, "full_like() copies dtype")
+    runner_assert_eq(r, lk_if.get_flat_int(1), 7, "full_like() converts value to dtype")
+    lk_if.free()
+    lk_i.free()
+
+    let dg = tensor::Tensor.from_array([3], [5.0, 6.0, 7.0])
+    let dg_m = dg.diag()
+    runner_assert_eq(r, dg_m.shape[0], 3, "diag() rows == 3")
+    runner_assert_eq(r, dg_m.shape[1], 3, "diag() cols == 3")
+    runner_assert_eq(r, dg_m.get_2d(1, 1), 6.0, "diag() diagonal == 6")
+    runner_assert_eq(r, dg_m.get_2d(0, 1), 0.0, "diag() off-diagonal == 0")
+    let dg_back = dg_m.diagonal()
+    runner_assert_eq(r, dg_back.shape[0], 3, "diagonal() length == 3")
+    runner_assert_eq(r, dg_back.get_flat(2), 7.0, "diagonal() round-trips")
+    dg_back.free()
+    dg_m.free()
+    mismatch_caught = 0
+    try
+        let bad_dg = dg_m.diag()
+        bad_dg.free()
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "diag() throws on rank-2 input")
+    dg.free()
+    lk.free()
+
+    let tr = tensor::Tensor.from_array([3, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
+    let tru = tr.triu()
+    runner_assert_eq(r, tru.get_2d(0, 0), 1.0, "triu() keeps diagonal")
+    runner_assert_eq(r, tru.get_2d(0, 2), 3.0, "triu() keeps above")
+    runner_assert_eq(r, tru.get_2d(2, 0), 0.0, "triu() zeroes below")
+    tru.free()
+    let trl = tr.tril()
+    runner_assert_eq(r, trl.get_2d(2, 0), 7.0, "tril() keeps below")
+    runner_assert_eq(r, trl.get_2d(0, 2), 0.0, "tril() zeroes above")
+    trl.free()
+    let tru1 = tr.triu(1)
+    runner_assert_eq(r, tru1.get_2d(0, 0), 0.0, "triu(1) zeroes the main diagonal")
+    runner_assert_eq(r, tru1.get_2d(0, 1), 2.0, "triu(1) keeps first superdiagonal")
+    tru1.free()
+    tr.free()
+
+    let so = tensor::Tensor.from_array([5], [3.0, 1.0, 4.0, 1.0, 5.0])
+    let so_s = so.sort()
+    runner_assert_eq(r, so_s.get_flat(0), 1.0, "sort() head == 1")
+    runner_assert_eq(r, so_s.get_flat(1), 1.0, "sort() keeps duplicates")
+    runner_assert_eq(r, so_s.get_flat(4), 5.0, "sort() tail == 5")
+    so_s.free()
+    let so_o = so.argsort()
+    runner_assert_eq(r, so_o.get_flat_int(0), 1, "argsort() first position == 1")
+    runner_assert_eq(r, so_o.get_flat_int(4), 4, "argsort() last position == 4")
+    so_o.free()
+    let so_t = so.topk(2)
+    runner_assert_eq(r, so_t.shape[0], 2, "topk(2) length == 2")
+    runner_assert_eq(r, so_t.get_flat(0), 5.0, "topk(0) == 5")
+    runner_assert_eq(r, so_t.get_flat(1), 4.0, "topk(1) == 4")
+    so_t.free()
+    let so_c = so.cumsum()
+    runner_assert_eq(r, so_c.get_flat(0), 3.0, "cumsum(0) == 3")
+    runner_assert_eq(r, so_c.get_flat(2), 8.0, "cumsum(2) == 3+1+4")
+    runner_assert_eq(r, so_c.get_flat(4), 14.0, "cumsum(4) == total")
+    so_c.free()
+    mismatch_caught = 0
+    try
+        let bad_tk = so.topk(9)
+        bad_tk.free()
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "topk() throws when k > size")
+    so.free()
+    let so_i = tensor::Tensor.from_array_int([4], [3, 1, 2, 1], 2)
+    let so_is = so_i.sort()
+    runner_assert_eq(r, so_is.get_flat_int(0), 1, "Int32 sort() head == 1")
+    runner_assert_eq(r, so_is.get_flat_int(3), 3, "Int32 sort() tail == 3")
+    so_is.free()
+    let so_ic = so_i.cumsum()
+    runner_assert_eq(r, so_ic.get_flat_int(3), 7, "Int32 cumsum() tail == 3+1+2+1")
+    so_ic.free()
+    so_i.free()
+
+    # ═══════════════════════════════════════════════════════════════
+    # 20. Serialization Round-Trip (save / load)
+    # ═══════════════════════════════════════════════════════════════
+    let sv = tensor::Tensor.from_array([2, 3], [1.0, -1.0, 0.1, 3.25, -0.0, 100.5])
+    let sv_path = "./target_tensor_save.alya-tensor"
+    sv.save(sv_path)
+    let sv_back = tensor::Tensor.load(sv_path)
+    runner_assert_eq(r, sv_back.shape[0], 2, "load() restores rows")
+    runner_assert_eq(r, sv_back.shape[1], 3, "load() restores cols")
+    runner_assert_eq(r, sv_back.dtype, 0, "load() restores dtype")
+    runner_assert_true(r, sv_back.allclose(sv) == true, "load() round-trips float bits exactly")
+    sv_back.free()
+    sv.free()
+
+    let sv_i = tensor::Tensor.from_array_int([3], [1, -42, 7], 2)
+    sv_i.save(sv_path)
+    let sv_i_back = tensor::Tensor.load(sv_path)
+    runner_assert_eq(r, sv_i_back.get_flat_int(0), 1, "load() restores Int32 head")
+    runner_assert_eq(r, sv_i_back.get_flat_int(1), -42, "load() restores Int32 negatives")
+    sv_i_back.free()
+    sv_i.free()
+
+    let sv_d = tensor::Tensor.ones([1, 1]).to(2)
+    sv_d.save(sv_path)
+    let sv_d_back = tensor::Tensor.load(sv_path)
+    runner_assert_eq(r, sv_d_back.device_of(), 2, "load() restores device placement")
+    sv_d_back.free()
+    sv_d.free()
+
+    write_file(sv_path, "junk, not a tensor file\nsecond line\n")
+    mismatch_caught = 0
+    try
+        let bad_load = tensor::Tensor.load(sv_path)
+        bad_load.free()
+    catch err
+        mismatch_caught = 1
+    end
+    runner_assert_eq(r, mismatch_caught, 1, "load() throws on unknown magic")
+    remove_file(sv_path)
+
+    # ═══════════════════════════════════════════════════════════════
     # 7. Data Models & Configuration (types.alya)
     # ═══════════════════════════════════════════════════════════════
     let cfg = tensor::new_config(tensor::TensorDevice.SIMD, 0, 4)

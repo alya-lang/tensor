@@ -22,7 +22,7 @@ High-performance N-dimensional Tensor engine with hardware-accelerated SIMD GEMM
 - 🎛️ **Device Placement (Phase 0)**: Per-tensor `device_id` tagging (`CPU`/`SIMD`/`GPU`), explicit `to()` transfer staging, `synchronize()` barrier, and a native accelerator registry (`c/device.c`) — no backend registered yet, so compute honestly falls back to CPU/SIMD (see GPU roadmap below)
 - 🛡️ **Loud Shape Errors**: Element-wise mismatches and bad reshapes `throw` instead of silently producing garbage
 - 🔒 **Public/Private Visibility (`pub`)**: Strict encapsulation of memory internals and buffer pointers
-- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (258 assertions) and micro-benchmarks
+- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (301 assertions) and micro-benchmarks
 - 🧮 **Element-Wise Math**: `neg`, `abs`, `sqrt`, `exp`, `ln`, `pow`, `clip` (exact integer paths where closed; direct native calls, immune to inference hazards)
 - 📉 **Extended Reductions**: `prod`, population `variance`/`std`, `argmin`/`argmax`
 - 📦 **Batched GEMM**: Rank-3+ `matmul` with broadcast batch dimensions (strided, view-consistent)
@@ -45,7 +45,7 @@ tensor/
 ├── examples/
 │   └── demo.alya           # Runnable showcase (GEMM, dtypes, broadcast, algebra, devices)
 ├── tests/
-│   └── test_basic.alya     # Automated test suite (258 assertions)
+│   └── test_basic.alya     # Automated test suite (301 assertions)
 └── benches/
     └── bench_basic.alya    # Micro-benchmarks (allocation, GEMM, reductions)
 ```
@@ -126,6 +126,13 @@ main()
 | `Tensor.linspace(start, stop, num, dtype)` | `pub function` | Creates rank-1 with `num` evenly spaced points (inclusive). |
 | `Tensor.randn(shape, dtype)` | `pub function` | Creates a Tensor with standard-normal random values (Box-Muller). |
 | `Tensor.full(shape, val, dtype)` | `pub function` | Creates a new Tensor with every element set to `val`. |
+| `Tensor.zeros_like(ref)` | `pub function` | Zero tensor matching reference shape/dtype/device. |
+| `Tensor.ones_like(ref)` | `pub function` | Ones tensor matching reference shape/dtype/device. |
+| `Tensor.full_like(ref, val)` | `pub function` | Filled tensor matching reference shape/dtype/device. |
+| `Tensor.diag(self)` | `pub method` | Builds an n-by-n diagonal matrix from a rank-1 tensor. |
+| `Tensor.diagonal(self)` | `pub method` | Extracts the main diagonal as a rank-1 copy. |
+| `Tensor.triu(self, k)` | `pub method` | Upper triangle (NumPy `k` offset semantics). |
+| `Tensor.tril(self, k)` | `pub method` | Lower triangle (NumPy `k` offset semantics). |
 | `Tensor.eye(n, dtype)` | `pub function` | Creates an n-by-n identity matrix. |
 | `Tensor.copy(self)` | `pub method` | Deep copy with a freshly allocated buffer (no aliasing). |
 | `Tensor.to_dtype(self, dtype)` | `pub method` | Converts storage dtype (float-mediated; 2^53 caveat for Int64). |
@@ -157,6 +164,10 @@ main()
 | `Tensor.max(self)` | `pub method` | Finds the maximum element value. |
 | `Tensor.argmin(self)` | `pub method` | Returns the flat index of the minimum element (first occurrence wins). |
 | `Tensor.argmax(self)` | `pub method` | Returns the flat index of the maximum element (first occurrence wins). |
+| `Tensor.argsort(self)` | `pub method` | Ascending sort positions as an Int32 index tensor (stable mergesort). |
+| `Tensor.sort(self)` | `pub method` | All elements sorted ascending as a rank-1 tensor. |
+| `Tensor.topk(self, k)` | `pub method` | `k` largest values, descending (pair with `argsort` for positions). |
+| `Tensor.cumsum(self)` | `pub method` | Flat-order prefix sums with the input shape. |
 | `Tensor.get_2d(self, row, col)` | `pub method` | Fast 2D matrix element access. |
 | `Tensor.set_2d(self, row, col, val)`| `pub method` | Fast 2D matrix element mutation. |
 | `Tensor.reshape(self, new_shape)` | `pub method` | Creates a reshaped view with updated dimension strides. Throws on element-count mismatch. |
@@ -174,6 +185,8 @@ main()
 | `Tensor.allclose(self, other, tol)` | `pub method` | Approximate element-wise equality within absolute tolerance `tol` (default `1e-9`); `false` on shape mismatch. |
 | `Tensor.to_array(self)` | `pub method` | Converts all tensor elements to a standard flat Alya float array. |
 | `Tensor.to_array_int(self)` | `pub method` | Converts all tensor elements to a flat Alya integer array (exact for integer storage). |
+| `Tensor.save(self, path)` | `pub method` | Serializes to a text file (bit-exact `ALYA-TENSOR-1` format). |
+| `Tensor.load(path)` | `pub function` | Deserializes a `save` file (shape, dtype, device, bits). |
 | `Tensor.free(self)` | `pub method` | Releases 32-byte aligned buffer from heap memory. |
 | `TensorDtype` | `pub enum` | Supported numerical data types (`Float64`, `Float32`, `Int64`, `Int32`). |
 | `TensorDevice` | `pub enum` | Target execution device backend (`CPU`, `SIMD`, `GPU`). |

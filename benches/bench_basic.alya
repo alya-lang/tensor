@@ -210,6 +210,35 @@ function main()
     end
     bench_stop(runner, "Tensor.randn([32, 32])")
 
+    # 16. Full sort of 1024 elements
+    let s1 = tensor::Tensor.randn([1024])
+    let n_sort = 500
+    bench_start(runner, n_sort)
+    let sort_idx = 0
+    while sort_idx < n_sort
+        let res = s1.sort()
+        res.free()
+        sort_idx += 1
+    end
+    bench_stop(runner, "Tensor.sort([1024])")
+    s1.free()
+
+    # 17. Text serialization round-trip [32, 32]
+    let w1 = tensor::Tensor.ones([32, 32])
+    let wpath = "./target_bench_save.alya-tensor"
+    let n_io = 200
+    bench_start(runner, n_io)
+    let io_idx = 0
+    while io_idx < n_io
+        w1.save(wpath)
+        let res = tensor::Tensor.load(wpath)
+        res.free()
+        io_idx += 1
+    end
+    bench_stop(runner, "Tensor.save+load([32, 32])")
+    w1.free()
+    remove_file(wpath)
+
     bench_summary(runner)
 end
 
