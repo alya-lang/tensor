@@ -935,6 +935,10 @@ function main()
 
     let derr = tensor::device_last_error()
     runner_assert(r, len(derr) >= 0, "device_last_error() returns a status string")
+    if acc
+        runner_assert(r, len(tensor::device_name()) > 0, "device_name() identifies the accelerator")
+        say "  [info] accelerator: " + tensor::device_name()
+    end
 
     let qa_src = tensor::Tensor.from_array([2, 2, 2], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
     let qa = qa_src.to(2)

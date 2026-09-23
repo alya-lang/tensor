@@ -18,6 +18,7 @@ extern "C"
     function alya_tensor_device_count() -> i32
     function alya_tensor_device_supports(dtype: i32) -> i32
     function alya_tensor_ocl_error() -> str
+    function alya_tensor_ocl_name() -> str
     function alya_tensor_ocl_alloc(byte_size: i32) -> ptr
     function alya_tensor_ocl_free(handle: ptr) -> void
     function alya_tensor_ocl_write(handle: ptr, host: ptr, byte_size: i32) -> i32
@@ -48,6 +49,18 @@ end
 ## Human-readable backend status string.
 pub function device_last_error() -> string
     return alya_tensor_ocl_error()
+end
+
+## Returns the human-readable name of the selected accelerator device.
+##
+## Empty when no backend is available; check `device_has_accelerator`
+## first. Answers "which GPU runs it" (e.g. Intel UHD vs NVIDIA GeForce:
+## the first platform exposing devices wins, GPU type preferred).
+##
+## ### Returns
+## Device name string from the OpenCL driver.
+pub function device_name() -> string
+    return alya_tensor_ocl_name()
 end
 
 ## Global ordering barrier for device streams.

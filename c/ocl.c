@@ -216,6 +216,7 @@ static cl_command_queue ocl_queue = 0;
 static cl_device_id ocl_device = 0;
 static cl_kernel ocl_kernels[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static char ocl_error[2048] = {0};
+static char ocl_dev_name[256] = {0};
 
 static void ocl_trace(const char *what) {
     const char *on = getenv("ALYA_TENSOR_OCL_DEBUG");
@@ -356,7 +357,28 @@ static void ocl_init(void) {
     ocl_device = dev;
     ocl_device_count = (int)ndev;
     ocl_state = 1;
-    ocl_trace("backend ready");
+    if (p_clGetDeviceInfo(dev, CL_DEVICE_NAME, sizeof(ocl_dev_name) - 1, ocl_dev_name, 0) != CL_SUCCESS) {
+        ocl_dev_name[0] = 0;
+    }
+    {
+        char ready[300] = {0};
+        const char *prefix = "backend ready on ";
+        size_t pi = 0;
+        while (pi + 1 < sizeof(ready) && prefix[pi]) {
+            ready[pi] = prefix[pi];
+            ++pi;
+        }
+        {
+            size_t di = 0;
+            while (pi + 1 < sizeof(ready) && ocl_dev_name[di]) {
+                ready[pi] = ocl_dev_name[di];
+                ++pi;
+                ++di;
+            }
+        }
+        ready[pi] = 0;
+        ocl_trace(ready);
+    }
 }
 
 // Kernel table index by (op, dtype): op 0 = add, 1 = mul, 2 = matmul;
@@ -389,6 +411,11 @@ int32_t alya_tensor_ocl_supports(int32_t dtype) {
 
 const char *alya_tensor_ocl_error(void) {
     return ocl_error;
+}
+
+const char *alya_tensor_ocl_name(void) {
+    ocl_init();
+    return ocl_dev_name;
 }
 
 void *alya_tensor_ocl_alloc(int32_t byte_size) {

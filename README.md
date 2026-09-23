@@ -22,7 +22,7 @@ High-performance N-dimensional Tensor engine with hardware-accelerated SIMD GEMM
 - 🎛️ **Device Placement + OpenCL Offload**: Per-tensor `device_id` tagging (`CPU`/`SIMD`/`GPU`), explicit `to()` transfer staging, `synchronize()` barrier, and a portable OpenCL backend (`c/ocl.c`, runtime-loaded, no SDK) accelerating `add`/`mul`/`matmul` for `f32`/`i32`/`i64` (+ `f64` with `cl_khr_fp64`) with loud CPU fallback (see GPU roadmap below)
 - 🛡️ **Loud Shape Errors**: Element-wise mismatches and bad reshapes `throw` instead of silently producing garbage
 - 🔒 **Public/Private Visibility (`pub`)**: Strict encapsulation of memory internals and buffer pointers
-- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (321 assertions) and micro-benchmarks (18 kernels, incl. GPU-tagged offload)
+- 🧪 **Thoroughly Tested & Benchmarked**: Comprehensive unit test suite (322 assertions) and micro-benchmarks (18 kernels, incl. GPU-tagged offload)
 - 🧮 **Element-Wise Math**: `neg`, `abs`, `sqrt`, `exp`, `ln`, `pow`, `clip` (exact integer paths where closed; direct native calls, immune to inference hazards)
 - 📉 **Extended Reductions**: `prod`, population `variance`/`std`, `argmin`/`argmax`
 - 📦 **Batched GEMM**: Rank-3+ `matmul` with broadcast batch dimensions (strided, view-consistent)
@@ -46,7 +46,7 @@ tensor/
 ├── examples/
 │   └── demo.alya           # Runnable showcase (GEMM, dtypes, broadcast, algebra, devices)
 ├── tests/
-│   └── test_basic.alya     # Automated test suite (321 assertions)
+│   └── test_basic.alya     # Automated test suite (322 assertions)
 └── benches/
     └── bench_basic.alya    # Micro-benchmarks (allocation, GEMM, reductions)
 ```
@@ -197,6 +197,7 @@ main()
 | `Tensor.is_accelerated(self)` | `pub method` | `true` only for GPU-placed tensors on machines with a registered backend. |
 | `device_has_accelerator()` | `pub function` | Queries the native registry; `true` when an OpenCL device exists. |
 | `device_last_error()` | `pub function` | Last native backend error message (empty when healthy). |
+| `device_name()` | `pub function` | Human-readable accelerator device name (empty without a backend). |
 | `synchronize()` | `pub function` | Ordering barrier for device streams (documented no-op while execution is synchronous). |
 
 > [!NOTE]
