@@ -1635,7 +1635,8 @@ end
 ## - `self`: The target `Tensor` instance.
 ##
 ## ### Returns
-## A `[size]`-shaped `Tensor` view sharing the same buffer.
+## A `[size]`-shaped `Tensor` view sharing the same buffer (only the
+## owner frees it; freeing a view double-frees the buffer).
 pub function Tensor.flatten(self: Tensor) -> Tensor
     return self.reshape([self.size])
 end

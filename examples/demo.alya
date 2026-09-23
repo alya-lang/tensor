@@ -1,20 +1,97 @@
-## Demo of the tensor package
+## Demo of the tensor package: dtypes, broadcasting, shape algebra, device placement
 ## Part of the Alya Language package ecosystem (https://github.com/alya-lang)
 
-import "../src/lib.alya"
+import "../src/lib.alya" as tensor
 
-let t = Tensor.from_array([2, 2], [1.0, 2.0, 3.0, 4.0])
-say "Tensor 2x2 created:"
-say t.get_2d(0, 0)
-say t.get_2d(0, 1)
-say t.get_2d(1, 0)
-say t.get_2d(1, 1)
+function main()
+    say "=== Alya Tensor Engine Demo ==="
 
-let t2 = t.matmul(t)
-say "Squared via matmul:"
-say t2.get_2d(0, 0)
-say t2.get_2d(1, 1)
+    # 1. Float64 GEMM matrix multiplication (2x3 * 3x2 -> 2x2)
+    say "\n1. Float64 GEMM:"
+    let A = tensor::Tensor.from_array([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    let B = tensor::Tensor.from_array([3, 2], [7.0, 8.0, 9.0, 1.0, 2.0, 3.0])
+    let C = A.matmul(B)
+    say "  C = " + C.to_string()
+    A.free()
+    B.free()
+    C.free()
 
-t.free()
-t2.free()
-say "Done!"
+    # 2. Real dtype storage: exact Int32 arithmetic + Float32 tensors
+    say "\n2. Dtype storage (Int32 exact, Float32 compact):"
+    let ia = tensor::Tensor.from_array_int([2, 2], [1, 2, 3, 4], 2)
+    let ib = tensor::Tensor.from_array_int([2, 2], [5, 6, 7, 8], 2)
+    let ic = ia.matmul(ib)
+    say "  Int32 matmul = " + ic.to_string()
+    ia.free()
+    ib.free()
+    ic.free()
+    let f = tensor::Tensor.full([2, 2], 0.5, 1)
+    say "  Float32 full(0.5) sum = " + str(f.sum())
+    f.free()
+
+    # 3. NumPy-style broadcasting ([2, 1] + [1, 3] -> [2, 3])
+    say "\n3. Broadcasting:"
+    let col = tensor::Tensor.from_array([2, 1], [10.0, 20.0])
+    let row = tensor::Tensor.from_array([1, 3], [1.0, 2.0, 3.0])
+    let bc = col.add(row)
+    say "  [10, 20] + [1, 2, 3] = " + bc.to_string()
+    col.free()
+    row.free()
+    bc.free()
+
+    # 4. Shape algebra: transpose, reshape, batched matmul
+    say "\n4. Shape algebra:"
+    let m = tensor::Tensor.from_array([2, 3], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    let mt = m.transpose()
+    say "  transpose = " + mt.to_string()
+    mt.free()
+    let mf = m.flatten()
+    say "  flatten = " + mf.to_string()
+    # mf is a view aliasing m's buffer: never freed (m owns it)
+    let eye = tensor::Tensor.eye(2)
+    let b3 = tensor::Tensor.from_array([2, 2, 2], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+    let b3r = b3.matmul(eye)
+    say "  batched x eye batch 1 = [" + str(b3r.get([1, 0, 0])) + ", " + str(b3r.get([1, 0, 1])) + ", " + str(b3r.get([1, 1, 0])) + ", " + str(b3r.get([1, 1, 1])) + "]"
+    m.free()
+    eye.free()
+    b3.free()
+    b3r.free()
+
+    # 5. Reductions, math kernels, tolerance comparison
+    say "\n5. Reductions & math:"
+    let s = tensor::Tensor.from_array([4], [1.0, 2.0, 3.0, 4.0])
+    say "  sum=" + str(s.sum()) + " mean=" + str(s.mean()) + " var=" + str(s.variance()) + " argmax=" + str(s.argmax())
+    let sq = s.sqrt()
+    let ng = s.neg()
+    say "  sqrt = " + sq.to_string() + " neg = " + ng.to_string()
+    sq.free()
+    ng.free()
+    let doubled = s.scale(2.0)
+    let added = s.add(s)
+    if doubled.allclose(added)
+        say "  allclose(scaled, s+s) = yes"
+    else
+        say "  allclose(scaled, s+s) = NO (BUG)"
+    end
+    added.free()
+    s.free()
+    doubled.free()
+
+    # 6. Device placement (Phase 0: tagging + honest CPU fallback)
+    say "\n6. Device placement:"
+    let d = tensor::Tensor.ones([2, 2])
+    let g = d.to(tensor::TensorDevice.GPU)
+    say "  device_of = " + str(g.device_of()) + " (2 = GPU)"
+    if g.is_accelerated()
+        say "  accelerated: yes"
+    else
+        say "  accelerated: no (CPU fallback, registry empty)"
+    end
+    tensor::synchronize()
+    d.free()
+    g.free()
+
+    say "\nDemo finished successfully!"
+end
+
+main()

@@ -43,7 +43,7 @@ tensor/
 ├── c/
 │   └── device.c            # Accelerator registry (no backend registered yet)
 ├── examples/
-│   └── demo.alya           # Runnable usage examples
+│   └── demo.alya           # Runnable showcase (GEMM, dtypes, broadcast, algebra, devices)
 ├── tests/
 │   └── test_basic.alya     # Automated test suite (198 assertions)
 └── benches/
