@@ -211,6 +211,9 @@ end
 ##
 ## ### Returns
 ## The broadcast output shape array.
+##
+## ### Throws
+## Incompatible trailing dimension pair (both non-`1` and unequal).
 pub function broadcast_shape(a: array, b: array) -> array
     let ra: int = len(a)
     let rb: int = len(b)
@@ -325,6 +328,9 @@ end
 ## - `shape`: Dimension size array.
 ## - `dtype`: Storage dtype tag (`0` = Float64, `1` = Float32, `2` = Int32, `3` = Int64).
 ## - `device`: Execution placement tag (`0` = CPU, `1` = SIMD, `2` = GPU).
+##
+## ### Throws
+## Unknown dtype tag (expected `0..3`) or unknown device tag (expected `0..2`).
 pub function Tensor.new(shape, dtype: int = 0, device: int = 0) -> Tensor
     if dtype < 0 or dtype > 3
         throw "Unknown tensor dtype tag (expected 0..3)"
@@ -441,6 +447,9 @@ end
 ##
 ## ### Returns
 ## The initialized rank-1 `Tensor` instance.
+##
+## ### Throws
+## Negative element count.
 pub function Tensor.arange(n: int, dtype: int = 2) -> Tensor
     if n < 0
         throw "Tensor.arange requires a non-negative count"
@@ -477,6 +486,9 @@ end
 ##
 ## ### Returns
 ## The initialized rank-1 `Tensor` instance.
+##
+## ### Throws
+## Zero step.
 pub function Tensor.arange_step(start: int, stop: int, step: int, dtype: int = 2) -> Tensor
     if step == 0
         throw "Tensor.arange_step requires a non-zero step"
@@ -517,6 +529,9 @@ end
 ##
 ## ### Returns
 ## The initialized rank-1 `Tensor` instance.
+##
+## ### Throws
+## Non-positive point count.
 pub function Tensor.linspace(start: float, stop: float, num: int, dtype: int = 0) -> Tensor
     if num <= 0
         throw "Tensor.linspace requires a positive point count"
@@ -662,6 +677,9 @@ end
 ##
 ## ### Returns
 ## An independent `Tensor` on the target device.
+##
+## ### Throws
+## Unknown device tag (expected `0..2`).
 pub function Tensor.to(self: Tensor, device: int) -> Tensor
     if device < 0 or device > 2
         throw "Unknown tensor device tag (expected 0..2)"
@@ -846,6 +864,9 @@ end
 ## right-aligned (a `[B, M, K]` by `[K, N]` works, reusing the single
 ## matrix). Rank-1 inputs throw (use `sum` of an element-wise product for
 ## dot products).
+##
+## ### Throws
+## Rank below 2, or mismatched inner (`K`) dimensions.
 pub function Tensor.matmul(self: Tensor, other: Tensor) -> Tensor
     let ra: int = len(self.shape)
     let rb: int = len(other.shape)
@@ -1083,6 +1104,9 @@ end
 ##
 ## Shapes broadcast right-aligned (size-1 dimensions stretch); incompatible
 ## shapes throw. A scalar adds via a `[1]` tensor: `t.add(Tensor.full([1], 2.0))`.
+##
+## ### Throws
+## Broadcast-incompatible shapes, or dtype mismatch (no implicit promotion).
 pub function Tensor.add(self: Tensor, other: Tensor) -> Tensor
     assert_same_dtype(self, other)
     let out_shape = broadcast_shape(self.shape, other.shape)
@@ -1132,6 +1156,9 @@ end
 ##
 ## Shapes broadcast right-aligned (size-1 dimensions stretch); incompatible
 ## shapes throw.
+##
+## ### Throws
+## Broadcast-incompatible shapes, or dtype mismatch (no implicit promotion).
 pub function Tensor.sub(self: Tensor, other: Tensor) -> Tensor
     assert_same_dtype(self, other)
     let out_shape = broadcast_shape(self.shape, other.shape)
@@ -1181,6 +1208,9 @@ end
 ##
 ## Shapes broadcast right-aligned (size-1 dimensions stretch); incompatible
 ## shapes throw.
+##
+## ### Throws
+## Broadcast-incompatible shapes, or dtype mismatch (no implicit promotion).
 pub function Tensor.mul(self: Tensor, other: Tensor) -> Tensor
     assert_same_dtype(self, other)
     let out_shape = broadcast_shape(self.shape, other.shape)
@@ -1232,6 +1262,10 @@ end
 ## shapes throw. Float division by zero follows IEEE-754 semantics
 ## (`inf` / `-inf` / `nan`); integer division truncates toward zero and
 ## throws on a zero divisor.
+##
+## ### Throws
+## Broadcast-incompatible shapes, dtype mismatch (no implicit promotion),
+## or integer division by zero.
 pub function Tensor.div(self: Tensor, other: Tensor) -> Tensor
     assert_same_dtype(self, other)
     let out_shape = broadcast_shape(self.shape, other.shape)
@@ -1615,6 +1649,9 @@ pub function Tensor.sum(self: Tensor) -> float
 end
 
 ## Computes the arithmetic mean of all elements in the tensor.
+##
+## ### Throws
+## Empty tensor.
 pub function Tensor.mean(self: Tensor) -> float
     if self.size == 0
         throw "Cannot compute mean of an empty tensor"
@@ -1623,6 +1660,9 @@ pub function Tensor.mean(self: Tensor) -> float
 end
 
 ## Finds the minimum element value in the tensor.
+##
+## ### Throws
+## Empty tensor.
 pub function Tensor.min(self: Tensor) -> float
     if self.size == 0
         throw "Cannot compute min of an empty tensor"
@@ -1652,6 +1692,9 @@ pub function Tensor.min(self: Tensor) -> float
 end
 
 ## Finds the maximum element value in the tensor.
+##
+## ### Throws
+## Empty tensor.
 pub function Tensor.max(self: Tensor) -> float
     if self.size == 0
         throw "Cannot compute max of an empty tensor"
@@ -1706,6 +1749,9 @@ end
 
 ## Computes the population variance of all elements (divides by N).
 ## Integer storage converts through float (exact below 2^53).
+##
+## ### Throws
+## Empty tensor.
 pub function Tensor.variance(self: Tensor) -> float
     if self.size == 0
         throw "Cannot compute variance of an empty tensor"
@@ -1728,6 +1774,9 @@ pub function Tensor.std(self: Tensor) -> float
 end
 
 ## Returns the flat index of the minimum element (first occurrence wins).
+##
+## ### Throws
+## Empty tensor.
 pub function Tensor.argmin(self: Tensor) -> int
     if self.size == 0
         throw "Cannot compute argmin of an empty tensor"
@@ -1761,6 +1810,9 @@ pub function Tensor.argmin(self: Tensor) -> int
 end
 
 ## Returns the flat index of the maximum element (first occurrence wins).
+##
+## ### Throws
+## Empty tensor.
 pub function Tensor.argmax(self: Tensor) -> int
     if self.size == 0
         throw "Cannot compute argmax of an empty tensor"
@@ -1795,15 +1847,16 @@ end
 
 ## Returns a new Tensor view with a reshaped dimension configuration.
 ##
-## Throws when the element count differs: silently returning the original
-## tensor would propagate a wrong shape downstream.
-##
 ## ### Parameters
 ## - `self`: The target `Tensor` instance.
 ## - `new_shape`: Reshaped dimension size array.
 ##
 ## ### Returns
 ## The reshaped `Tensor` view sharing the same buffer.
+##
+## ### Throws
+## Element-count mismatch (returns the input silently would propagate a
+## wrong shape downstream, so it throws instead).
 pub function Tensor.reshape(self: Tensor, new_shape: array) -> Tensor
     let new_size: int = compute_size(new_shape)
     if new_size != self.size
@@ -1827,15 +1880,17 @@ end
 
 ## Returns the 2D transpose of the tensor as a new contiguous tensor.
 ##
-## Only 2D tensors can be transposed; anything else throws. The result
-## owns a freshly allocated buffer in row-major order (not a strided
-## view), so flat element-wise kernels keep working on it.
+## The result owns a freshly allocated buffer in row-major order (not a
+## strided view), so flat element-wise kernels keep working on it.
 ##
 ## ### Parameters
 ## - `self`: The target rank-2 `Tensor` instance.
 ##
 ## ### Returns
 ## A new `[cols, rows]`-shaped `Tensor`.
+##
+## ### Throws
+## Non-2D input.
 pub function Tensor.transpose(self: Tensor) -> Tensor
     if len(self.shape) != 2
         throw "Tensor.transpose requires a 2D tensor"
@@ -1871,6 +1926,10 @@ end
 ##
 ## ### Returns
 ## A `Tensor` view sharing the same buffer with broadcast strides.
+##
+## ### Throws
+## Target rank below `self` rank, empty target dimensions, or an
+## incompatible dimension pair.
 pub function Tensor.broadcast_to(self: Tensor, shape: array) -> Tensor
     let rank: int = len(shape)
     let srank: int = len(self.shape)
@@ -1938,6 +1997,9 @@ end
 ##
 ## ### Returns
 ## A `Tensor` view with the widened shape.
+##
+## ### Throws
+## Insertion `dim` outside `0..=rank`.
 pub function Tensor.unsqueeze(self: Tensor, dim: int) -> Tensor
     let rank: int = len(self.shape)
     if dim < 0 or dim > rank
@@ -1969,6 +2031,9 @@ end
 ##
 ## ### Returns
 ## A new contiguous `Tensor` with permuted shape.
+##
+## ### Throws
+## `axes` with wrong length, out-of-range entries, or repeats.
 pub function Tensor.permute(self: Tensor, axes: array) -> Tensor
     let rank: int = len(self.shape)
     if len(axes) != rank
@@ -2033,6 +2098,9 @@ end
 ##
 ## ### Returns
 ## A new contiguous `Tensor` holding the sliced elements.
+##
+## ### Throws
+## Out-of-range `dim`, or bounds violating `0 <= start <= stop <= shape[dim]`.
 pub function Tensor.slice(self: Tensor, dim: int, start: int, stop: int) -> Tensor
     let rank: int = len(self.shape)
     if dim < 0 or dim >= rank
@@ -2094,6 +2162,10 @@ end
 ##
 ## ### Returns
 ## A new contiguous `Tensor`.
+##
+## ### Throws
+## Empty input list, out-of-range `dim`, differing ranks or dtypes, or
+## mismatched non-concat dimensions.
 pub function Tensor.concat(tensors: array, dim: int) -> Tensor
     if len(tensors) == 0
         throw "Tensor.concat requires at least one tensor"
@@ -2181,6 +2253,9 @@ end
 ##
 ## ### Returns
 ## A new contiguous `Tensor` with one extra dimension.
+##
+## ### Throws
+## Empty input list (element validation delegates to `unsqueeze`/`concat`).
 pub function Tensor.stack(tensors: array, dim: int) -> Tensor
     if len(tensors) == 0
         throw "Tensor.stack requires at least one tensor"
@@ -2206,6 +2281,9 @@ end
 ##
 ## ### Returns
 ## An array of new contiguous `Tensor` chunks (caller frees each).
+##
+## ### Throws
+## Non-positive part count, out-of-range `dim`, or uneven division.
 pub function Tensor.split(self: Tensor, parts: int, dim: int) -> array
     let rank: int = len(self.shape)
     if parts <= 0
