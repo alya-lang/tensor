@@ -218,7 +218,7 @@ main()
 
 ---
 
-## 🎛️ Device Execution & GPU Roadmap
+### 🎛️ Device Execution & GPU Roadmap
 
 Phase 1 (shipped): GPU-tagged `add`/`mul`/`matmul` offload to three native backends behind one router (`c/device.c` priority: CUDA, then Metal on macOS, then OpenCL). CUDA (`c/device_cuda.c`) uses the driver API + embedded PTX 6.0/sm_50 JIT-compiled by the driver — no toolkit, no link flags, `f64` first-class. Metal (`c/device_metal.c`) is pure C over the ObjC runtime with MSL compiled at runtime (no fp64 on Apple GPUs). OpenCL (`c/ocl.c`) loads the system library at runtime. Anything unsupported — no driver, missing extension, oversized transfer, non-contiguous views, mixed placement — returns `false` through the dispatch layer and runs the CPU/SIMD kernels with placement preserved. GPU devices are preferred; CPU OpenCL devices (e.g. `pocl`, installed on Linux CI) count too, so the native path executes in CI. Set `ALYA_TENSOR_OCL_DEBUG=1` for stderr launch tracing (`[tensor-cuda]` / `[tensor-ocl]` / `[tensor-metal]`).
 
