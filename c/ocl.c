@@ -309,6 +309,13 @@ static void ocl_fail(const char *msg) {
     ocl_error[n] = 0;
 }
 
+// A failed launch/transfer/sync means the context is likely dead: poison
+// the backend for the process lifetime so later calls fail safe (CPU
+// fallback) instead of blocking forever on a wedged context.
+static void ocl_poison(void) {
+    ocl_state = -1;
+}
+
 static int ocl_load_api(void) {
     if (!ocl_lib_open()) return 0;
     OCL_WANT(clGetPlatformIDs);
@@ -543,7 +550,10 @@ static int32_t ocl_launch_ew(void *ah, void *bh, void *oh, int32_t count, int op
     global = (size_t)count;
     {
         void *ev = 0;
-        if (p_clEnqueueNDRangeKernel(ocl_queue, k, 1, 0, &global, 0, 0, 0, &ev) != CL_SUCCESS) return 0;
+        if (p_clEnqueueNDRangeKernel(ocl_queue, k, 1, 0, &global, 0, 0, 0, &ev) != CL_SUCCESS) {
+            ocl_poison();
+            return 0;
+        }
         ocl_track(ev);
     }
     ocl_trace("element-wise launch ok");
@@ -587,7 +597,10 @@ int32_t alya_tensor_ocl_matmul(void *ah, void *bh, void *oh, int32_t a_off, int3
         local[1] = 16;
         {
             void *ev = 0;
-            if (p_clEnqueueNDRangeKernel(ocl_queue, kr, 2, 0, rounded, local, 0, 0, &ev) != CL_SUCCESS) return 0;
+            if (p_clEnqueueNDRangeKernel(ocl_queue, kr, 2, 0, rounded, local, 0, 0, &ev) != CL_SUCCESS) {
+                ocl_poison();
+                return 0;
+            }
             ocl_track(ev);
         }
     }
@@ -611,5 +624,6 @@ int32_t alya_tensor_ocl_sync(void) {
         ocl_event_count = 0;
     }
     if (p_clFinish(ocl_queue) != CL_SUCCESS) ok = 0;
+    if (!ok) ocl_poison();
     return (int32_t)ok;
 }

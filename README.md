@@ -222,6 +222,8 @@ main()
 
 Phase 1 (shipped): GPU-tagged `add`/`mul`/`matmul` offload to three native backends behind one router (`c/device.c` priority: CUDA, then Metal on macOS, then OpenCL). CUDA (`c/device_cuda.c`) uses the driver API + embedded PTX 6.0/sm_50 JIT-compiled by the driver — no toolkit, no link flags, `f64` first-class. Metal (`c/device_metal.c`) is pure C over the ObjC runtime with MSL compiled at runtime (no fp64 on Apple GPUs). OpenCL (`c/ocl.c`) loads the system library at runtime. Anything unsupported — no driver, missing extension, oversized transfer, non-contiguous views, mixed placement — returns `false` through the dispatch layer and runs the CPU/SIMD kernels with placement preserved. GPU devices are preferred; CPU OpenCL devices (e.g. `pocl`, installed on Linux CI) count too, so the native path executes in CI. Set `ALYA_TENSOR_OCL_DEBUG=1` for stderr launch tracing (`[tensor-cuda]` / `[tensor-ocl]` / `[tensor-metal]`).
 
+**Failure safety:** a launch/transfer/sync error poisons that backend for the process lifetime (fail-safe CPU fallback instead of retrying a dead context, which can block forever). Grid dimensions are capped at hardware limits (oversized launches decline to fallback). Setting `ALYA_TENSOR_NO_GPU=1` disables all probing for pure-CPU runs (used to bisect hangs: green with the flag means the CPU side is clean).
+
 | Step | Status | Notes |
 |---|---|---|
 | Placement API (`to`, `device_of`, `synchronize`) | ✅ Shipped | Tested (§14), green with and without a backend |
