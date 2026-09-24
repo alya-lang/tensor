@@ -3,12 +3,12 @@ name = "tensor"
 version = "0.1.0"
 alya-version = "0.0.19"
 entry = "src/lib.alya"
-description = "Multi-dimensional tensor engine with SIMD vector acceleration"
+description = "N-dimensional tensor engine with multi-dtype storage, broadcasting, and GPU acceleration (CUDA/Metal/OpenCL)"
 authors = ["Alya Language Contributors <https://github.com/alya-lang>"]
 license = "MIT"
 homepage = "https://github.com/alya-lang/alya"
 repository = "https://github.com/alya-lang/tensor"
-keywords = ["alya", "alya-lang", "package", "tensor", "simd", "matrix", "math", "numeric"]
+keywords = ["alya", "alya-lang", "package", "tensor", "simd", "matrix", "math", "numeric", "gpu", "cuda", "metal", "opencl", "broadcasting", "matmul"]
 
 [dependencies]
 

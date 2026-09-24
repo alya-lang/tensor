@@ -5,7 +5,7 @@
 [![Alya](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Falya-lang%2Ftensor%2Fmain%2Falya.toml&query=%24.package.alya-version&label=Alya&color=orange&prefix=%3E%3D)](https://github.com/alya-lang/alya)
 [![Package Version](https://img.shields.io/badge/dynamic/toml?url=https%3A%2F%2Fraw.githubusercontent.com%2Falya-lang%2Ftensor%2Fmain%2Falya.toml&query=%24.package.version&label=Version&color=brightgreen)](alya.toml)
 
-High-performance N-dimensional Tensor engine with hardware-accelerated SIMD GEMM matrix multiplication and vector operations for Alya.
+High-performance N-dimensional Tensor engine with multi-dtype storage, broadcasting, and GPU-accelerated compute (CUDA/Metal/OpenCL) for Alya.
 
 ---
 
