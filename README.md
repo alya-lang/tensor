@@ -229,7 +229,7 @@ Phase 1 (shipped): GPU-tagged `add`/`mul`/`matmul` offload to three native backe
 | Placement API (`to`, `device_of`, `synchronize`) | ✅ Shipped | Tested (§14), green with and without a backend |
 | Native registry + FFI path (`c/device.c`) | ✅ Shipped | Compiles/links on all OSes via `[build]`; routes Metal-first on macOS |
 | OpenCL offload (`add`/`mul`/`matmul`, 4 dtypes) | ✅ Shipped | Tested (§21: 2D, batched, mixed-device fallback); verified on Intel UHD + `pocl` CI |
-| CUDA offload (`add`/`mul`/`matmul`, 4 dtypes) | ✅ Shipped, verified on RTX 3050 | Driver API + PTX 6.0 (no toolkit); naive matmul, ~130× CPU at 256³ |
+| CUDA offload (`add`/`mul`/`matmul`, 4 dtypes) | ✅ Shipped, verified on RTX 3050 | Driver API + PTX 6.0 (no toolkit); naive matmul kernels chosen for auditability after a tiled-PTX hang incident (see `c/device_cuda.c` header) |
 | Metal offload (`add`/`mul`/`matmul`, f32/i32/i64) | ✅ Shipped, macOS CI is the arbiter | Naive kernels (tiling follow-up); f64 falls back on Apple GPUs |
 | CPU-fallback numerics for device-tagged tensors | ✅ Shipped | Placement preserved through ops, values exact |
 | CPU-fallback numerics for device-tagged tensors | ✅ Shipped | Placement preserved through ops, values exact |
