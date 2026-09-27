@@ -289,14 +289,49 @@ function broadcast_copy_into(src: Tensor, res: Tensor)
     end
 end
 
-## Returns `t` itself when its shape already matches, otherwise a fresh
-## contiguous tensor materialized to `shape`. The return type is annotated
-## so method calls on the result keep resolving (tuple destructuring would
-## erase the struct type and break method dispatch at link time).
+## Reports whether shape/strides describe a dense row-major buffer.
+##
+## Size-1 dimensions are exempt (any stride reads the same element, NumPy
+## canonical contiguity). Non-contiguous tensors (e.g. `broadcast_to`
+## views with stride `0`) must be materialized before linear kernels
+## (`get_flat` loops, GPU staging) touch them.
+function tensor_is_contiguous_shape(shape: array, strides: array) -> bool
+    let n: int = len(shape)
+    if len(strides) != n
+        return false
+    end
+    let expect: int = 1
+    let d: int = n - 1
+    while d >= 0
+        let dim: int = shape[d]
+        if dim != 1
+            let st: int = strides[d]
+            if st != expect
+                return false
+            end
+            expect = expect * dim
+        end
+        d -= 1
+    end
+    return true
+end
+
+## Reports whether a tensor's storage is dense row-major (see above).
+function tensor_is_contiguous(t: Tensor) -> bool
+    return tensor_is_contiguous_shape(t.shape, t.strides)
+end
+
+## Returns `t` itself when its shape already matches and its storage is
+## contiguous, otherwise a fresh contiguous tensor materialized to `shape`.
+## The return type is annotated so method calls on the result keep resolving
+## (tuple destructuring would erase the struct type and break method dispatch
+## at link time).
 ## Pair with `materialized_is_temp` for the free discipline.
 function materialized_for_shape(t: Tensor, shape: array) -> Tensor
     if shapes_equal_shape(t.shape, shape)
-        return t
+        if tensor_is_contiguous(t)
+            return t
+        end
     end
     let res = Tensor.new(shape, t.dtype, t.device_id)
     broadcast_copy_into(t, res)
@@ -307,7 +342,9 @@ end
 ## or borrowed `t` itself (`false`, caller must not free).
 function materialized_is_temp(t: Tensor, shape: array) -> bool
     if shapes_equal_shape(t.shape, shape)
-        return false
+        if tensor_is_contiguous(t)
+            return false
+        end
     end
     return true
 end
@@ -1068,6 +1105,74 @@ pub function Tensor.set_int(self: Tensor, indices: array, val)
     tensor_write_int(self.data, flat_idx, self.dtype, val)
 end
 
+## SIMD dot product for Float64 storage: 4-wide fused accumulation.
+##
+## Each 4-lane step is a single `simd_dot_f64x4` native call that loads,
+## multiplies and accumulates in place with zero allocations (one vector
+## alloc per dot total). Offsets/steps are element units. `k < 4` takes a
+## pure scalar loop with legacy numerics.
+function gemm_dot_f64(a_data: ptr, a_base: int, a_step: int, b_data: ptr, b_base: int, b_step: int, k: int) -> float
+    if k < 4
+        let s: float = 0.0
+        let q: int = 0
+        while q < k
+            s += tensor_read_float(a_data, a_base + q * a_step, 0) * tensor_read_float(b_data, b_base + q * b_step, 0)
+            q += 1
+        end
+        return s
+    end
+    let acc = f64x4_splat(0.0)
+    let p: int = 0
+    let vec_limit: int = k - 3
+    while p < vec_limit
+        simd_dot_f64x4(a_data, (a_base + p * a_step) * 8, a_step * 8, b_data, (b_base + p * b_step) * 8, b_step * 8, acc.handle)
+        p += 4
+    end
+    let tail: float = 0.0
+    while p < k
+        tail += tensor_read_float(a_data, a_base + p * a_step, 0) * tensor_read_float(b_data, b_base + p * b_step, 0)
+        p += 1
+    end
+    return acc.sum_horizontal() + tail
+end
+
+## SIMD dot product for Float32 storage: 8-wide fused accumulation.
+## Same shape as `gemm_dot_f64` with 4-byte lanes; `k < 8` stays scalar.
+function gemm_dot_f32(a_data: ptr, a_base: int, a_step: int, b_data: ptr, b_base: int, b_step: int, k: int) -> float
+    if k < 8
+        let s: float = 0.0
+        let q: int = 0
+        while q < k
+            s += tensor_read_float(a_data, a_base + q * a_step, 1) * tensor_read_float(b_data, b_base + q * b_step, 1)
+            q += 1
+        end
+        return s
+    end
+    let acc = f32x8_splat(0.0)
+    let p: int = 0
+    let vec_limit: int = k - 7
+    while p < vec_limit
+        simd_dot_f32x8(a_data, (a_base + p * a_step) * 4, a_step * 4, b_data, (b_base + p * b_step) * 4, b_step * 4, acc.handle)
+        p += 8
+    end
+    let tail: float = 0.0
+    while p < k
+        tail += tensor_read_float(a_data, a_base + p * a_step, 1) * tensor_read_float(b_data, b_base + p * b_step, 1)
+        p += 1
+    end
+    return acc.sum_horizontal() + tail
+end
+
+## Dtype-dispatched dot product shared by the 2D and batched GEMM paths.
+## Integer dtypes keep exact scalar accumulation (see `matmul_int_into`);
+## float dtypes run the SIMD kernels above.
+function gemm_dot(a_data: ptr, a_base: int, a_step: int, b_data: ptr, b_base: int, b_step: int, k: int, dtype: int) -> float
+    if dtype == 1
+        return gemm_dot_f32(a_data, a_base, a_step, b_data, b_base, b_step, k)
+    end
+    return gemm_dot_f64(a_data, a_base, a_step, b_data, b_base, b_step, k)
+end
+
 ## High-Performance SIMD-Accelerated GEMM (General Matrix Multiply).
 ## Multiplies self (M x K) by other (K x N) to produce result (M x N).
 ## Inner dot loop uses 4-way SIMD lane unrolling and FMA3 instructions.
@@ -1108,32 +1213,16 @@ pub function Tensor.matmul(self: Tensor, other: Tensor) -> Tensor
                 return matmul_int_into(self, other, res, m, n, k)
             end
 
+            let a_s0: int = self.strides[0]
+            let a_s1: int = self.strides[1]
+            let b_s0: int = other.strides[0]
+            let b_s1: int = other.strides[1]
             let i: int = 0
             while i < m
                 let j: int = 0
                 while j < n
-                    let sum: float = 0.0
-                    let p: int = 0
-                    let unroll_limit: int = k - 3
-                    while p < unroll_limit
-                        let a0: float = self.get_2d(i, p)
-                        let b0: float = other.get_2d(p, j)
-                        let a1: float = self.get_2d(i, p + 1)
-                        let b1: float = other.get_2d(p + 1, j)
-                        let a2: float = self.get_2d(i, p + 2)
-                        let b2: float = other.get_2d(p + 2, j)
-                        let a3: float = self.get_2d(i, p + 3)
-                        let b3: float = other.get_2d(p + 3, j)
-                        sum += (a0 * b0) + (a1 * b1) + (a2 * b2) + (a3 * b3)
-                        p += 4
-                    end
-                    while p < k
-                        let ap: float = self.get_2d(i, p)
-                        let bp: float = other.get_2d(p, j)
-                        sum += ap * bp
-                        p += 1
-                    end
-                    res.set_2d(i, j, sum)
+                    let dot: float = gemm_dot(self.data, i * a_s0, a_s1, other.data, j * b_s1, b_s0, k, self.dtype)
+                    res.set_2d(i, j, dot)
                     j += 1
                 end
                 i += 1
@@ -1232,26 +1321,8 @@ function matmul_batch_float_into(a: Tensor, b: Tensor, res: Tensor, a_base: int,
     while i < m
         let j: int = 0
         while j < n
-            let sum: float = 0.0
-            let p: int = 0
-            let unroll_limit: int = k - 3
-            while p < unroll_limit
-                let a0: float = a.get_flat(a_base + i * a_s0 + p * a_s1)
-                let b0: float = b.get_flat(b_base + p * b_s0 + j * b_s1)
-                let a1: float = a.get_flat(a_base + i * a_s0 + (p + 1) * a_s1)
-                let b1: float = b.get_flat(b_base + (p + 1) * b_s0 + j * b_s1)
-                let a2: float = a.get_flat(a_base + i * a_s0 + (p + 2) * a_s1)
-                let b2: float = b.get_flat(b_base + (p + 2) * b_s0 + j * b_s1)
-                let a3: float = a.get_flat(a_base + i * a_s0 + (p + 3) * a_s1)
-                let b3: float = b.get_flat(b_base + (p + 3) * b_s0 + j * b_s1)
-                sum += (a0 * b0) + (a1 * b1) + (a2 * b2) + (a3 * b3)
-                p += 4
-            end
-            while p < k
-                sum += a.get_flat(a_base + i * a_s0 + p * a_s1) * b.get_flat(b_base + p * b_s0 + j * b_s1)
-                p += 1
-            end
-            res.set_flat(r_base + i * r_s0 + j, sum)
+            let dot: float = gemm_dot(a.data, a_base + i * a_s0, a_s1, b.data, b_base + j * b_s1, b_s0, k, a.dtype)
+            res.set_flat(r_base + i * r_s0 + j, dot)
             j += 1
         end
         i += 1
@@ -1494,7 +1565,7 @@ end
 ## Element-wise subtraction with NumPy-style broadcasting (4-wide unrolled).
 ##
 ## Shapes broadcast right-aligned (size-1 dimensions stretch); incompatible
-## shapes throw.
+## shapes throw. GPU-placed tensors offload when dense and supported.
 ##
 ## ### Throws
 ## Broadcast-incompatible shapes, or dtype mismatch (no implicit promotion).
@@ -1506,32 +1577,34 @@ pub function Tensor.sub(self: Tensor, other: Tensor) -> Tensor
     let lhs_tmp = materialized_is_temp(self, out_shape)
     let rhs_tmp = materialized_is_temp(other, out_shape)
     let res = Tensor.new(out_shape, self.dtype, self.device_id)
-    if dtype_is_int(self.dtype)
-        sub_int_tensors(lhs, rhs, res)
-    else
-        let total: int = res.size
-        let i: int = 0
-        let unroll_limit: int = total - 3
-        while i < unroll_limit
-            let a0: float = lhs.get_flat(i)
-            let b0: float = rhs.get_flat(i)
-            let a1: float = lhs.get_flat(i + 1)
-            let b1: float = rhs.get_flat(i + 1)
-            let a2: float = lhs.get_flat(i + 2)
-            let b2: float = rhs.get_flat(i + 2)
-            let a3: float = lhs.get_flat(i + 3)
-            let b3: float = rhs.get_flat(i + 3)
-            res.set_flat(i, a0 - b0)
-            res.set_flat(i + 1, a1 - b1)
-            res.set_flat(i + 2, a2 - b2)
-            res.set_flat(i + 3, a3 - b3)
-            i += 4
-        end
-        while i < total
-            let a_val: float = lhs.get_flat(i)
-            let b_val: float = rhs.get_flat(i)
-            res.set_flat(i, a_val - b_val)
-            i += 1
+    if device_offload_ew(lhs, rhs, res, res.size, 2) == false
+        if dtype_is_int(self.dtype)
+            sub_int_tensors(lhs, rhs, res)
+        else
+            let total: int = res.size
+            let i: int = 0
+            let unroll_limit: int = total - 3
+            while i < unroll_limit
+                let a0: float = lhs.get_flat(i)
+                let b0: float = rhs.get_flat(i)
+                let a1: float = lhs.get_flat(i + 1)
+                let b1: float = rhs.get_flat(i + 1)
+                let a2: float = lhs.get_flat(i + 2)
+                let b2: float = rhs.get_flat(i + 2)
+                let a3: float = lhs.get_flat(i + 3)
+                let b3: float = rhs.get_flat(i + 3)
+                res.set_flat(i, a0 - b0)
+                res.set_flat(i + 1, a1 - b1)
+                res.set_flat(i + 2, a2 - b2)
+                res.set_flat(i + 3, a3 - b3)
+                i += 4
+            end
+            while i < total
+                let a_val: float = lhs.get_flat(i)
+                let b_val: float = rhs.get_flat(i)
+                res.set_flat(i, a_val - b_val)
+                i += 1
+            end
         end
     end
     if lhs_tmp
@@ -1602,7 +1675,8 @@ end
 ## Shapes broadcast right-aligned (size-1 dimensions stretch); incompatible
 ## shapes throw. Float division by zero follows IEEE-754 semantics
 ## (`inf` / `-inf` / `nan`); integer division truncates toward zero and
-## throws on a zero divisor.
+## throws on a zero divisor. Float division offloads to GPU when placed
+## there; integer division always runs on CPU (throw semantics).
 ##
 ## ### Throws
 ## Broadcast-incompatible shapes, dtype mismatch (no implicit promotion),
@@ -1618,29 +1692,31 @@ pub function Tensor.div(self: Tensor, other: Tensor) -> Tensor
     if dtype_is_int(self.dtype)
         div_int_tensors(lhs, rhs, res)
     else
-        let total: int = res.size
-        let i: int = 0
-        let unroll_limit: int = total - 3
-        while i < unroll_limit
-            let a0: float = lhs.get_flat(i)
-            let b0: float = rhs.get_flat(i)
-            let a1: float = lhs.get_flat(i + 1)
-            let b1: float = rhs.get_flat(i + 1)
-            let a2: float = lhs.get_flat(i + 2)
-            let b2: float = rhs.get_flat(i + 2)
-            let a3: float = lhs.get_flat(i + 3)
-            let b3: float = rhs.get_flat(i + 3)
-            res.set_flat(i, a0 / b0)
-            res.set_flat(i + 1, a1 / b1)
-            res.set_flat(i + 2, a2 / b2)
-            res.set_flat(i + 3, a3 / b3)
-            i += 4
-        end
-        while i < total
-            let a_val: float = lhs.get_flat(i)
-            let b_val: float = rhs.get_flat(i)
-            res.set_flat(i, a_val / b_val)
-            i += 1
+        if device_offload_ew(lhs, rhs, res, res.size, 3) == false
+            let total: int = res.size
+            let i: int = 0
+            let unroll_limit: int = total - 3
+            while i < unroll_limit
+                let a0: float = lhs.get_flat(i)
+                let b0: float = rhs.get_flat(i)
+                let a1: float = lhs.get_flat(i + 1)
+                let b1: float = rhs.get_flat(i + 1)
+                let a2: float = lhs.get_flat(i + 2)
+                let b2: float = rhs.get_flat(i + 2)
+                let a3: float = lhs.get_flat(i + 3)
+                let b3: float = rhs.get_flat(i + 3)
+                res.set_flat(i, a0 / b0)
+                res.set_flat(i + 1, a1 / b1)
+                res.set_flat(i + 2, a2 / b2)
+                res.set_flat(i + 3, a3 / b3)
+                i += 4
+            end
+            while i < total
+                let a_val: float = lhs.get_flat(i)
+                let b_val: float = rhs.get_flat(i)
+                res.set_flat(i, a_val / b_val)
+                i += 1
+            end
         end
     end
     if lhs_tmp

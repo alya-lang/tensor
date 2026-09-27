@@ -31,6 +31,8 @@ int32_t alya_tensor_ocl_write(void *handle, void *host, int32_t byte_size);
 int32_t alya_tensor_ocl_read(void *handle, void *host, int32_t byte_size);
 int32_t alya_tensor_ocl_add(void *ah, void *bh, void *oh, int32_t count, int32_t dtype);
 int32_t alya_tensor_ocl_mul(void *ah, void *bh, void *oh, int32_t count, int32_t dtype);
+int32_t alya_tensor_ocl_sub(void *ah, void *bh, void *oh, int32_t count, int32_t dtype);
+int32_t alya_tensor_ocl_div(void *ah, void *bh, void *oh, int32_t count, int32_t dtype);
 int32_t alya_tensor_ocl_matmul(void *ah, void *bh, void *oh, int32_t a_off, int32_t b_off,
                                int32_t r_off, int32_t m, int32_t n, int32_t k, int32_t dtype);
 int32_t alya_tensor_ocl_sync(void);
@@ -45,6 +47,8 @@ int32_t alya_tensor_cuda_write(void *handle, void *host, int32_t byte_size);
 int32_t alya_tensor_cuda_read(void *handle, void *host, int32_t byte_size);
 int32_t alya_tensor_cuda_add(void *ah, void *bh, void *oh, int32_t count, int32_t dtype);
 int32_t alya_tensor_cuda_mul(void *ah, void *bh, void *oh, int32_t count, int32_t dtype);
+int32_t alya_tensor_cuda_sub(void *ah, void *bh, void *oh, int32_t count, int32_t dtype);
+int32_t alya_tensor_cuda_div(void *ah, void *bh, void *oh, int32_t count, int32_t dtype);
 int32_t alya_tensor_cuda_matmul(void *ah, void *bh, void *oh, int32_t a_off, int32_t b_off,
                                 int32_t r_off, int32_t m, int32_t n, int32_t k, int32_t dtype);
 int32_t alya_tensor_cuda_sync(void);
@@ -60,6 +64,8 @@ int32_t alya_tensor_metal_write(void *handle, void *host, int32_t byte_size);
 int32_t alya_tensor_metal_read(void *handle, void *host, int32_t byte_size);
 int32_t alya_tensor_metal_add(void *ah, void *bh, void *oh, int32_t count, int32_t dtype);
 int32_t alya_tensor_metal_mul(void *ah, void *bh, void *oh, int32_t count, int32_t dtype);
+int32_t alya_tensor_metal_sub(void *ah, void *bh, void *oh, int32_t count, int32_t dtype);
+int32_t alya_tensor_metal_div(void *ah, void *bh, void *oh, int32_t count, int32_t dtype);
 int32_t alya_tensor_metal_matmul(void *ah, void *bh, void *oh, int32_t a_off, int32_t b_off,
                                  int32_t r_off, int32_t m, int32_t n, int32_t k, int32_t dtype);
 int32_t alya_tensor_metal_sync(void);
@@ -315,6 +321,26 @@ int32_t alya_tensor_device_mul(void *ah, void *bh, void *oh, int32_t count, int3
     if (back == 2) return alya_tensor_metal_mul(ah, bh, oh, count, dtype);
 #endif
     return alya_tensor_ocl_mul(ah, bh, oh, count, dtype);
+}
+
+int32_t alya_tensor_device_sub(void *ah, void *bh, void *oh, int32_t count, int32_t dtype) {
+    int back = active_backend();
+    if (back == 0) return 0;
+    if (back == 1) return alya_tensor_cuda_sub(ah, bh, oh, count, dtype);
+#ifdef __APPLE__
+    if (back == 2) return alya_tensor_metal_sub(ah, bh, oh, count, dtype);
+#endif
+    return alya_tensor_ocl_sub(ah, bh, oh, count, dtype);
+}
+
+int32_t alya_tensor_device_div(void *ah, void *bh, void *oh, int32_t count, int32_t dtype) {
+    int back = active_backend();
+    if (back == 0) return 0;
+    if (back == 1) return alya_tensor_cuda_div(ah, bh, oh, count, dtype);
+#ifdef __APPLE__
+    if (back == 2) return alya_tensor_metal_div(ah, bh, oh, count, dtype);
+#endif
+    return alya_tensor_ocl_div(ah, bh, oh, count, dtype);
 }
 
 int32_t alya_tensor_device_matmul(void *ah, void *bh, void *oh, int32_t a_off, int32_t b_off,

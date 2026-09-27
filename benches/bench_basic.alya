@@ -260,6 +260,56 @@ function main()
     g1.free()
     g2.free()
 
+    # 19. Element-wise Subtraction [32, 32], CPU vs GPU-tagged
+    let sb1 = tensor::Tensor.full([32, 32], 5.0)
+    let sb2 = tensor::Tensor.full([32, 32], 2.0)
+    let n_sub = 5000
+    bench_start(runner, n_sub)
+    let sub_idx = 0
+    while sub_idx < n_sub
+        let res = sb1.sub(sb2)
+        res.free()
+        sub_idx += 1
+    end
+    bench_stop(runner, "Tensor.sub([32, 32])")
+    let sg1 = sb1.to(2)
+    let sg2 = sb2.to(2)
+    let sgwarm = sg1.sub(sg2)
+    sgwarm.free()
+    bench_start(runner, n_sub)
+    let sgpu_idx = 0
+    while sgpu_idx < n_sub
+        let res = sg1.sub(sg2)
+        res.free()
+        sgpu_idx += 1
+    end
+    bench_stop(runner, "Tensor.sub GPU-tagged([32, 32])")
+    sb1.free()
+    sb2.free()
+    sg1.free()
+    sg2.free()
+
+    # 20. Element-wise Division [32, 32], GPU-tagged
+    let dv1 = tensor::Tensor.full([32, 32], 4.0)
+    let dv2 = tensor::Tensor.full([32, 32], 2.0)
+    let dg1 = dv1.to(2)
+    let dg2 = dv2.to(2)
+    let dgwarm = dg1.div(dg2)
+    dgwarm.free()
+    let n_divg = 5000
+    bench_start(runner, n_divg)
+    let divg_idx = 0
+    while divg_idx < n_divg
+        let res = dg1.div(dg2)
+        res.free()
+        divg_idx += 1
+    end
+    bench_stop(runner, "Tensor.div GPU-tagged([32, 32])")
+    dv1.free()
+    dv2.free()
+    dg1.free()
+    dg2.free()
+
     bench_summary(runner)
 end
 

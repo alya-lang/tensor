@@ -140,6 +140,14 @@ static const char *ocl_kernel_src =
     "    int i = get_global_id(0);\n"
     "    if (i < n) o[i] = a[i] * b[i];\n"
     "}\n"
+    "__kernel void tsub_f32(__global const float* a, __global const float* b, __global float* o, int n) {\n"
+    "    int i = get_global_id(0);\n"
+    "    if (i < n) o[i] = a[i] - b[i];\n"
+    "}\n"
+    "__kernel void tdiv_f32(__global const float* a, __global const float* b, __global float* o, int n) {\n"
+    "    int i = get_global_id(0);\n"
+    "    if (i < n) o[i] = a[i] / b[i];\n"
+    "}\n"
     "__kernel void tadd_i32(__global const int* a, __global const int* b, __global int* o, int n) {\n"
     "    int i = get_global_id(0);\n"
     "    if (i < n) o[i] = a[i] + b[i];\n"
@@ -148,6 +156,14 @@ static const char *ocl_kernel_src =
     "    int i = get_global_id(0);\n"
     "    if (i < n) o[i] = a[i] * b[i];\n"
     "}\n"
+    "__kernel void tsub_i32(__global const int* a, __global const int* b, __global int* o, int n) {\n"
+    "    int i = get_global_id(0);\n"
+    "    if (i < n) o[i] = a[i] - b[i];\n"
+    "}\n"
+    "__kernel void tdiv_i32(__global const int* a, __global const int* b, __global int* o, int n) {\n"
+    "    int i = get_global_id(0);\n"
+    "    if (i < n) o[i] = a[i] / b[i];\n"
+    "}\n"
     "__kernel void tadd_i64(__global const long* a, __global const long* b, __global long* o, int n) {\n"
     "    int i = get_global_id(0);\n"
     "    if (i < n) o[i] = a[i] + b[i];\n"
@@ -155,6 +171,14 @@ static const char *ocl_kernel_src =
     "__kernel void tmul_i64(__global const long* a, __global const long* b, __global long* o, int n) {\n"
     "    int i = get_global_id(0);\n"
     "    if (i < n) o[i] = a[i] * b[i];\n"
+    "}\n"
+    "__kernel void tsub_i64(__global const long* a, __global const long* b, __global long* o, int n) {\n"
+    "    int i = get_global_id(0);\n"
+    "    if (i < n) o[i] = a[i] - b[i];\n"
+    "}\n"
+    "__kernel void tdiv_i64(__global const long* a, __global const long* b, __global long* o, int n) {\n"
+    "    int i = get_global_id(0);\n"
+    "    if (i < n) o[i] = a[i] / b[i];\n"
     "}\n"
     "__kernel void tmm_f32(__global const float* A, __global const float* B, __global float* C,\n"
     "                      int ao, int bo, int ro, int M, int N, int K) {\n"
@@ -229,6 +253,14 @@ static const char *ocl_kernel_src =
     "    int i = get_global_id(0);\n"
     "    if (i < n) o[i] = a[i] * b[i];\n"
     "}\n"
+    "__kernel void tsub_f64(__global const double* a, __global const double* b, __global double* o, int n) {\n"
+    "    int i = get_global_id(0);\n"
+    "    if (i < n) o[i] = a[i] - b[i];\n"
+    "}\n"
+    "__kernel void tdiv_f64(__global const double* a, __global const double* b, __global double* o, int n) {\n"
+    "    int i = get_global_id(0);\n"
+    "    if (i < n) o[i] = a[i] / b[i];\n"
+    "}\n"
     "__kernel void tmm_f64(__global const double* A, __global const double* B, __global double* C,\n"
     "                      int ao, int bo, int ro, int M, int N, int K) {\n"
     "    int j = get_global_id(0);\n"
@@ -252,10 +284,12 @@ static const char *ocl_kernel_src =
     "}\n"
     "#endif\n";
 
-static const char *ocl_kernel_names[12] = {
+static const char *ocl_kernel_names[20] = {
     "tadd_f32", "tmul_f32", "tadd_f64", "tmul_f64",
     "tadd_i32", "tmul_i32", "tadd_i64", "tmul_i64",
-    "tmm_f32", "tmm_f64", "tmm_i32", "tmm_i64"
+    "tmm_f32", "tmm_f64", "tmm_i32", "tmm_i64",
+    "tsub_f32", "tsub_f64", "tsub_i32", "tsub_i64",
+    "tdiv_f32", "tdiv_f64", "tdiv_i32", "tdiv_i64"
 };
 
 // --- Backend state (single device, process lifetime) ---
@@ -266,7 +300,7 @@ static int ocl_has_fp64 = 0;
 static cl_context ocl_ctx = 0;
 static cl_command_queue ocl_queue = 0;
 static cl_device_id ocl_device = 0;
-static cl_kernel ocl_kernels[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+static cl_kernel ocl_kernels[20] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static char ocl_error[2048] = {0};
 static char ocl_dev_name[256] = {0};
 
@@ -430,8 +464,8 @@ static void ocl_init(void) {
         p_clReleaseProgram(prog);
         return;
     }
-    for (ki = 0; ki < 12; ++ki) {
-        if ((ki == 2 || ki == 3 || ki == 9) && !ocl_has_fp64) continue;
+    for (ki = 0; ki < 20; ++ki) {
+        if ((ki == 2 || ki == 3 || ki == 9 || ki == 13 || ki == 17) && !ocl_has_fp64) continue;
         ocl_kernels[ki] = p_clCreateKernel(prog, ocl_kernel_names[ki], &err);
         if (!ocl_kernels[ki] || err != CL_SUCCESS) {
             ocl_kernels[ki] = 0;
@@ -465,15 +499,17 @@ static void ocl_init(void) {
     }
 }
 
-// Kernel table index by (op, dtype): op 0 = add, 1 = mul, 2 = matmul;
-// dtype 0 = f64, 1 = f32, 2 = i32, 3 = i64.
+// Kernel table index by (op, dtype): op 0 = add, 1 = mul, 2 = sub,
+// 3 = div, 4 = matmul; dtype 0 = f64, 1 = f32, 2 = i32, 3 = i64.
 static int ocl_kernel_index(int op, int dtype) {
-    static const int table[3][4] = {
+    static const int table[5][4] = {
         {2, 0, 4, 6},
         {3, 1, 5, 7},
+        {13, 12, 14, 15},
+        {17, 16, 18, 19},
         {9, 8, 10, 11}
     };
-    if (op < 0 || op > 2 || dtype < 0 || dtype > 3) return -1;
+    if (op < 0 || op > 4 || dtype < 0 || dtype > 3) return -1;
     return table[op][dtype];
 }
 
@@ -568,13 +604,21 @@ int32_t alya_tensor_ocl_mul(void *ah, void *bh, void *oh, int32_t count, int32_t
     return ocl_launch_ew(ah, bh, oh, count, 1, dtype);
 }
 
+int32_t alya_tensor_ocl_sub(void *ah, void *bh, void *oh, int32_t count, int32_t dtype) {
+    return ocl_launch_ew(ah, bh, oh, count, 2, dtype);
+}
+
+int32_t alya_tensor_ocl_div(void *ah, void *bh, void *oh, int32_t count, int32_t dtype) {
+    return ocl_launch_ew(ah, bh, oh, count, 3, dtype);
+}
+
 int32_t alya_tensor_ocl_matmul(void *ah, void *bh, void *oh, int32_t a_off, int32_t b_off, int32_t r_off,
                                int32_t m, int32_t n, int32_t k, int32_t dtype) {
     int ki = 0;
     cl_kernel kr = 0;
     ocl_init();
     if (ocl_state != 1 || !ah || !bh || !oh || m <= 0 || n <= 0 || k <= 0) return 0;
-    ki = ocl_kernel_index(2, (int)dtype);
+    ki = ocl_kernel_index(4, (int)dtype);
     if (ki < 0 || !ocl_kernels[ki]) return 0;
     kr = ocl_kernels[ki];
     if (p_clSetKernelArg(kr, 0, sizeof(void *), &ah) != CL_SUCCESS) return 0;

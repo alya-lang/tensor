@@ -51,6 +51,14 @@ static const char *metal_kernel_src =
     "                     device float* o [[buffer(2)]], uint i [[thread_position_in_grid]]) {\n"
     "    o[i] = a[i] * b[i];\n"
     "}\n"
+    "kernel void tsub_f32(device const float* a [[buffer(0)]], device const float* b [[buffer(1)]],\n"
+    "                     device float* o [[buffer(2)]], uint i [[thread_position_in_grid]]) {\n"
+    "    o[i] = a[i] - b[i];\n"
+    "}\n"
+    "kernel void tdiv_f32(device const float* a [[buffer(0)]], device const float* b [[buffer(1)]],\n"
+    "                     device float* o [[buffer(2)]], uint i [[thread_position_in_grid]]) {\n"
+    "    o[i] = a[i] / b[i];\n"
+    "}\n"
     "kernel void tadd_i32(device const int* a [[buffer(0)]], device const int* b [[buffer(1)]],\n"
     "                     device int* o [[buffer(2)]], uint i [[thread_position_in_grid]]) {\n"
     "    o[i] = a[i] + b[i];\n"
@@ -59,6 +67,14 @@ static const char *metal_kernel_src =
     "                     device int* o [[buffer(2)]], uint i [[thread_position_in_grid]]) {\n"
     "    o[i] = a[i] * b[i];\n"
     "}\n"
+    "kernel void tsub_i32(device const int* a [[buffer(0)]], device const int* b [[buffer(1)]],\n"
+    "                     device int* o [[buffer(2)]], uint i [[thread_position_in_grid]]) {\n"
+    "    o[i] = a[i] - b[i];\n"
+    "}\n"
+    "kernel void tdiv_i32(device const int* a [[buffer(0)]], device const int* b [[buffer(1)]],\n"
+    "                     device int* o [[buffer(2)]], uint i [[thread_position_in_grid]]) {\n"
+    "    o[i] = a[i] / b[i];\n"
+    "}\n"
     "kernel void tadd_i64(device const long* a [[buffer(0)]], device const long* b [[buffer(1)]],\n"
     "                     device long* o [[buffer(2)]], uint i [[thread_position_in_grid]]) {\n"
     "    o[i] = a[i] + b[i];\n"
@@ -66,6 +82,14 @@ static const char *metal_kernel_src =
     "kernel void tmul_i64(device const long* a [[buffer(0)]], device const long* b [[buffer(1)]],\n"
     "                     device long* o [[buffer(2)]], uint i [[thread_position_in_grid]]) {\n"
     "    o[i] = a[i] * b[i];\n"
+    "}\n"
+    "kernel void tsub_i64(device const long* a [[buffer(0)]], device const long* b [[buffer(1)]],\n"
+    "                     device long* o [[buffer(2)]], uint i [[thread_position_in_grid]]) {\n"
+    "    o[i] = a[i] - b[i];\n"
+    "}\n"
+    "kernel void tdiv_i64(device const long* a [[buffer(0)]], device const long* b [[buffer(1)]],\n"
+    "                     device long* o [[buffer(2)]], uint i [[thread_position_in_grid]]) {\n"
+    "    o[i] = a[i] / b[i];\n"
     "}\n"
     "kernel void tmm_f32(device const float* A [[buffer(0)]], device const float* B [[buffer(1)]],\n"
     "                    device float* C [[buffer(2)]], constant int* P [[buffer(3)]],\n"
@@ -140,11 +164,13 @@ static const char *metal_kernel_src =
     "    if (i < M && j < N) C[ro + i * N + j] = s;\n"
     "}\n";
 
-static const char *metal_kernel_names[9] = {
+static const char *metal_kernel_names[15] = {
     "tadd_f32", "tmul_f32",
     "tadd_i32", "tmul_i32",
     "tadd_i64", "tmul_i64",
-    "tmm_f32", "tmm_i32", "tmm_i64"
+    "tmm_f32", "tmm_i32", "tmm_i64",
+    "tsub_f32", "tsub_i32", "tsub_i64",
+    "tdiv_f32", "tdiv_i32", "tdiv_i64"
 };
 
 // --- Backend state (single device, process lifetime) ---
@@ -152,7 +178,7 @@ static const char *metal_kernel_names[9] = {
 static int metal_state = 0; // 0 = unprobed, 1 = ready, -1 = unavailable
 static id metal_dev = 0;
 static id metal_queue = 0;
-static id metal_pipes[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+static id metal_pipes[15] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static char metal_error[2048] = {0};
 static char metal_name[256] = {0};
 
@@ -243,7 +269,7 @@ static void metal_init(void) {
         metal_describe_error(err);
         return;
     }
-    for (ki = 0; ki < 9; ++ki) {
+    for (ki = 0; ki < 15; ++ki) {
         id fname = 0;
         id fn = 0;
         id pipe = 0;
@@ -293,15 +319,18 @@ static void metal_init(void) {
     metal_trace("backend ready");
 }
 
-// Kernel table index by (op, dtype): op 0 = add, 1 = mul, 2 = matmul;
-// dtype 1 = f32, 2 = i32, 3 = i64 (f64 unsupported: index -1).
+// Kernel table index by (op, dtype): op 0 = add, 1 = mul, 2 = sub,
+// 3 = div, 4 = matmul; dtype 1 = f32, 2 = i32, 3 = i64 (f64 unsupported:
+// index -1).
 static int metal_kernel_index(int op, int dtype) {
-    static const int table[3][4] = {
+    static const int table[5][4] = {
         {-1, 0, 2, 4},
         {-1, 1, 3, 5},
+        {-1, 9, 10, 11},
+        {-1, 12, 13, 14},
         {-1, 6, 7, 8}
     };
-    if (op < 0 || op > 2 || dtype < 0 || dtype > 3) return -1;
+    if (op < 0 || op > 4 || dtype < 0 || dtype > 3) return -1;
     return table[op][dtype];
 }
 
@@ -476,13 +505,21 @@ int32_t alya_tensor_metal_mul(void *ah, void *bh, void *oh, int32_t count, int32
     return metal_launch_ew(ah, bh, oh, count, 1, dtype);
 }
 
+int32_t alya_tensor_metal_sub(void *ah, void *bh, void *oh, int32_t count, int32_t dtype) {
+    return metal_launch_ew(ah, bh, oh, count, 2, dtype);
+}
+
+int32_t alya_tensor_metal_div(void *ah, void *bh, void *oh, int32_t count, int32_t dtype) {
+    return metal_launch_ew(ah, bh, oh, count, 3, dtype);
+}
+
 int32_t alya_tensor_metal_matmul(void *ah, void *bh, void *oh, int32_t a_off, int32_t b_off, int32_t r_off,
                                  int32_t m, int32_t n, int32_t k, int32_t dtype) {
     int params[6];
     int ki = 0;
     metal_init();
     if (metal_state != 1 || !ah || !bh || !oh || m <= 0 || n <= 0 || k <= 0) return 0;
-    ki = metal_kernel_index(2, (int)dtype);
+    ki = metal_kernel_index(4, (int)dtype);
     if (ki < 0 || !metal_pipes[ki]) return 0;
     params[0] = a_off;
     params[1] = b_off;

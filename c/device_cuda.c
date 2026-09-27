@@ -162,6 +162,60 @@ static const char *cuda_ptx_src =
     "$done:\n"
     "    ret;\n"
     "}\n"
+    ".visible .entry tsub_f32(.param .u64 a, .param .u64 b, .param .u64 o, .param .u32 n)\n"
+    "{\n"
+    "    .reg .u64 %rd1, %rd2, %rd3, %rd4;\n"
+    "    .reg .u32 %r1, %r2, %r3, %r4;\n"
+    "    .reg .pred %p1;\n"
+    "    .reg .f32 %f1, %f2, %f3;\n"
+    "    mov.u32 %r1, %tid.x;\n"
+    "    mov.u32 %r2, %ntid.x;\n"
+    "    mov.u32 %r3, %ctaid.x;\n"
+    "    mad.lo.u32 %r1, %r3, %r2, %r1;\n"
+    "    ld.param.u32 %r4, [n];\n"
+    "    setp.ge.u32 %p1, %r1, %r4;\n"
+    "    @%p1 bra $done;\n"
+    "    mul.wide.u32 %rd1, %r1, 4;\n"
+    "    ld.param.u64 %rd2, [a];\n"
+    "    ld.param.u64 %rd3, [b];\n"
+    "    ld.param.u64 %rd4, [o];\n"
+    "    add.u64 %rd2, %rd2, %rd1;\n"
+    "    add.u64 %rd3, %rd3, %rd1;\n"
+    "    add.u64 %rd4, %rd4, %rd1;\n"
+    "    ld.global.f32 %f1, [%rd2];\n"
+    "    ld.global.f32 %f2, [%rd3];\n"
+    "    sub.f32 %f3, %f1, %f2;\n"
+    "    st.global.f32 [%rd4], %f3;\n"
+    "$done:\n"
+    "    ret;\n"
+    "}\n"
+    ".visible .entry tdiv_f32(.param .u64 a, .param .u64 b, .param .u64 o, .param .u32 n)\n"
+    "{\n"
+    "    .reg .u64 %rd1, %rd2, %rd3, %rd4;\n"
+    "    .reg .u32 %r1, %r2, %r3, %r4;\n"
+    "    .reg .pred %p1;\n"
+    "    .reg .f32 %f1, %f2, %f3;\n"
+    "    mov.u32 %r1, %tid.x;\n"
+    "    mov.u32 %r2, %ntid.x;\n"
+    "    mov.u32 %r3, %ctaid.x;\n"
+    "    mad.lo.u32 %r1, %r3, %r2, %r1;\n"
+    "    ld.param.u32 %r4, [n];\n"
+    "    setp.ge.u32 %p1, %r1, %r4;\n"
+    "    @%p1 bra $done;\n"
+    "    mul.wide.u32 %rd1, %r1, 4;\n"
+    "    ld.param.u64 %rd2, [a];\n"
+    "    ld.param.u64 %rd3, [b];\n"
+    "    ld.param.u64 %rd4, [o];\n"
+    "    add.u64 %rd2, %rd2, %rd1;\n"
+    "    add.u64 %rd3, %rd3, %rd1;\n"
+    "    add.u64 %rd4, %rd4, %rd1;\n"
+    "    ld.global.f32 %f1, [%rd2];\n"
+    "    ld.global.f32 %f2, [%rd3];\n"
+    "    div.f32 %f3, %f1, %f2;\n"
+    "    st.global.f32 [%rd4], %f3;\n"
+    "$done:\n"
+    "    ret;\n"
+    "}\n"
     ".visible .entry tadd_f64(.param .u64 a, .param .u64 b, .param .u64 o, .param .u32 n)\n"
     "{\n"
     "    .reg .u64 %rd1, %rd2, %rd3, %rd4;\n"
@@ -212,6 +266,60 @@ static const char *cuda_ptx_src =
     "    ld.global.f64 %f1, [%rd2];\n"
     "    ld.global.f64 %f2, [%rd3];\n"
     "    mul.f64 %f3, %f1, %f2;\n"
+    "    st.global.f64 [%rd4], %f3;\n"
+    "$done:\n"
+    "    ret;\n"
+    "}\n"
+    ".visible .entry tsub_f64(.param .u64 a, .param .u64 b, .param .u64 o, .param .u32 n)\n"
+    "{\n"
+    "    .reg .u64 %rd1, %rd2, %rd3, %rd4;\n"
+    "    .reg .u32 %r1, %r2, %r3, %r4;\n"
+    "    .reg .pred %p1;\n"
+    "    .reg .f64 %f1, %f2, %f3;\n"
+    "    mov.u32 %r1, %tid.x;\n"
+    "    mov.u32 %r2, %ntid.x;\n"
+    "    mov.u32 %r3, %ctaid.x;\n"
+    "    mad.lo.u32 %r1, %r3, %r2, %r1;\n"
+    "    ld.param.u32 %r4, [n];\n"
+    "    setp.ge.u32 %p1, %r1, %r4;\n"
+    "    @%p1 bra $done;\n"
+    "    mul.wide.u32 %rd1, %r1, 8;\n"
+    "    ld.param.u64 %rd2, [a];\n"
+    "    ld.param.u64 %rd3, [b];\n"
+    "    ld.param.u64 %rd4, [o];\n"
+    "    add.u64 %rd2, %rd2, %rd1;\n"
+    "    add.u64 %rd3, %rd3, %rd1;\n"
+    "    add.u64 %rd4, %rd4, %rd1;\n"
+    "    ld.global.f64 %f1, [%rd2];\n"
+    "    ld.global.f64 %f2, [%rd3];\n"
+    "    sub.f64 %f3, %f1, %f2;\n"
+    "    st.global.f64 [%rd4], %f3;\n"
+    "$done:\n"
+    "    ret;\n"
+    "}\n"
+    ".visible .entry tdiv_f64(.param .u64 a, .param .u64 b, .param .u64 o, .param .u32 n)\n"
+    "{\n"
+    "    .reg .u64 %rd1, %rd2, %rd3, %rd4;\n"
+    "    .reg .u32 %r1, %r2, %r3, %r4;\n"
+    "    .reg .pred %p1;\n"
+    "    .reg .f64 %f1, %f2, %f3;\n"
+    "    mov.u32 %r1, %tid.x;\n"
+    "    mov.u32 %r2, %ntid.x;\n"
+    "    mov.u32 %r3, %ctaid.x;\n"
+    "    mad.lo.u32 %r1, %r3, %r2, %r1;\n"
+    "    ld.param.u32 %r4, [n];\n"
+    "    setp.ge.u32 %p1, %r1, %r4;\n"
+    "    @%p1 bra $done;\n"
+    "    mul.wide.u32 %rd1, %r1, 8;\n"
+    "    ld.param.u64 %rd2, [a];\n"
+    "    ld.param.u64 %rd3, [b];\n"
+    "    ld.param.u64 %rd4, [o];\n"
+    "    add.u64 %rd2, %rd2, %rd1;\n"
+    "    add.u64 %rd3, %rd3, %rd1;\n"
+    "    add.u64 %rd4, %rd4, %rd1;\n"
+    "    ld.global.f64 %f1, [%rd2];\n"
+    "    ld.global.f64 %f2, [%rd3];\n"
+    "    div.f64 %f3, %f1, %f2;\n"
     "    st.global.f64 [%rd4], %f3;\n"
     "$done:\n"
     "    ret;\n"
@@ -270,6 +378,60 @@ static const char *cuda_ptx_src =
     "$done:\n"
     "    ret;\n"
     "}\n"
+    ".visible .entry tsub_i32(.param .u64 a, .param .u64 b, .param .u64 o, .param .u32 n)\n"
+    "{\n"
+    "    .reg .u64 %rd1, %rd2, %rd3, %rd4;\n"
+    "    .reg .u32 %r1, %r2, %r3, %r4;\n"
+    "    .reg .pred %p1;\n"
+    "    .reg .s32 %f1, %f2, %f3;\n"
+    "    mov.u32 %r1, %tid.x;\n"
+    "    mov.u32 %r2, %ntid.x;\n"
+    "    mov.u32 %r3, %ctaid.x;\n"
+    "    mad.lo.u32 %r1, %r3, %r2, %r1;\n"
+    "    ld.param.u32 %r4, [n];\n"
+    "    setp.ge.u32 %p1, %r1, %r4;\n"
+    "    @%p1 bra $done;\n"
+    "    mul.wide.u32 %rd1, %r1, 4;\n"
+    "    ld.param.u64 %rd2, [a];\n"
+    "    ld.param.u64 %rd3, [b];\n"
+    "    ld.param.u64 %rd4, [o];\n"
+    "    add.u64 %rd2, %rd2, %rd1;\n"
+    "    add.u64 %rd3, %rd3, %rd1;\n"
+    "    add.u64 %rd4, %rd4, %rd1;\n"
+    "    ld.global.s32 %f1, [%rd2];\n"
+    "    ld.global.s32 %f2, [%rd3];\n"
+    "    sub.s32 %f3, %f1, %f2;\n"
+    "    st.global.s32 [%rd4], %f3;\n"
+    "$done:\n"
+    "    ret;\n"
+    "}\n"
+    ".visible .entry tdiv_i32(.param .u64 a, .param .u64 b, .param .u64 o, .param .u32 n)\n"
+    "{\n"
+    "    .reg .u64 %rd1, %rd2, %rd3, %rd4;\n"
+    "    .reg .u32 %r1, %r2, %r3, %r4;\n"
+    "    .reg .pred %p1;\n"
+    "    .reg .s32 %f1, %f2, %f3;\n"
+    "    mov.u32 %r1, %tid.x;\n"
+    "    mov.u32 %r2, %ntid.x;\n"
+    "    mov.u32 %r3, %ctaid.x;\n"
+    "    mad.lo.u32 %r1, %r3, %r2, %r1;\n"
+    "    ld.param.u32 %r4, [n];\n"
+    "    setp.ge.u32 %p1, %r1, %r4;\n"
+    "    @%p1 bra $done;\n"
+    "    mul.wide.u32 %rd1, %r1, 4;\n"
+    "    ld.param.u64 %rd2, [a];\n"
+    "    ld.param.u64 %rd3, [b];\n"
+    "    ld.param.u64 %rd4, [o];\n"
+    "    add.u64 %rd2, %rd2, %rd1;\n"
+    "    add.u64 %rd3, %rd3, %rd1;\n"
+    "    add.u64 %rd4, %rd4, %rd1;\n"
+    "    ld.global.s32 %f1, [%rd2];\n"
+    "    ld.global.s32 %f2, [%rd3];\n"
+    "    div.s32 %f3, %f1, %f2;\n"
+    "    st.global.s32 [%rd4], %f3;\n"
+    "$done:\n"
+    "    ret;\n"
+    "}\n"
     ".visible .entry tadd_i64(.param .u64 a, .param .u64 b, .param .u64 o, .param .u32 n)\n"
     "{\n"
     "    .reg .u64 %rd1, %rd2, %rd3, %rd4;\n"
@@ -320,6 +482,60 @@ static const char *cuda_ptx_src =
     "    ld.global.s64 %f1, [%rd2];\n"
     "    ld.global.s64 %f2, [%rd3];\n"
     "    mul.lo.s64 %f3, %f1, %f2;\n"
+    "    st.global.s64 [%rd4], %f3;\n"
+    "$done:\n"
+    "    ret;\n"
+    "}\n"
+    ".visible .entry tsub_i64(.param .u64 a, .param .u64 b, .param .u64 o, .param .u32 n)\n"
+    "{\n"
+    "    .reg .u64 %rd1, %rd2, %rd3, %rd4;\n"
+    "    .reg .u32 %r1, %r2, %r3, %r4;\n"
+    "    .reg .pred %p1;\n"
+    "    .reg .s64 %f1, %f2, %f3;\n"
+    "    mov.u32 %r1, %tid.x;\n"
+    "    mov.u32 %r2, %ntid.x;\n"
+    "    mov.u32 %r3, %ctaid.x;\n"
+    "    mad.lo.u32 %r1, %r3, %r2, %r1;\n"
+    "    ld.param.u32 %r4, [n];\n"
+    "    setp.ge.u32 %p1, %r1, %r4;\n"
+    "    @%p1 bra $done;\n"
+    "    mul.wide.u32 %rd1, %r1, 8;\n"
+    "    ld.param.u64 %rd2, [a];\n"
+    "    ld.param.u64 %rd3, [b];\n"
+    "    ld.param.u64 %rd4, [o];\n"
+    "    add.u64 %rd2, %rd2, %rd1;\n"
+    "    add.u64 %rd3, %rd3, %rd1;\n"
+    "    add.u64 %rd4, %rd4, %rd1;\n"
+    "    ld.global.s64 %f1, [%rd2];\n"
+    "    ld.global.s64 %f2, [%rd3];\n"
+    "    sub.s64 %f3, %f1, %f2;\n"
+    "    st.global.s64 [%rd4], %f3;\n"
+    "$done:\n"
+    "    ret;\n"
+    "}\n"
+    ".visible .entry tdiv_i64(.param .u64 a, .param .u64 b, .param .u64 o, .param .u32 n)\n"
+    "{\n"
+    "    .reg .u64 %rd1, %rd2, %rd3, %rd4;\n"
+    "    .reg .u32 %r1, %r2, %r3, %r4;\n"
+    "    .reg .pred %p1;\n"
+    "    .reg .s64 %f1, %f2, %f3;\n"
+    "    mov.u32 %r1, %tid.x;\n"
+    "    mov.u32 %r2, %ntid.x;\n"
+    "    mov.u32 %r3, %ctaid.x;\n"
+    "    mad.lo.u32 %r1, %r3, %r2, %r1;\n"
+    "    ld.param.u32 %r4, [n];\n"
+    "    setp.ge.u32 %p1, %r1, %r4;\n"
+    "    @%p1 bra $done;\n"
+    "    mul.wide.u32 %rd1, %r1, 8;\n"
+    "    ld.param.u64 %rd2, [a];\n"
+    "    ld.param.u64 %rd3, [b];\n"
+    "    ld.param.u64 %rd4, [o];\n"
+    "    add.u64 %rd2, %rd2, %rd1;\n"
+    "    add.u64 %rd3, %rd3, %rd1;\n"
+    "    add.u64 %rd4, %rd4, %rd1;\n"
+    "    ld.global.s64 %f1, [%rd2];\n"
+    "    ld.global.s64 %f2, [%rd3];\n"
+    "    div.s64 %f3, %f1, %f2;\n"
     "    st.global.s64 [%rd4], %f3;\n"
     "$done:\n"
     "    ret;\n"
@@ -549,10 +765,12 @@ static const char *cuda_ptx_src =
     "    ret;\n"
     "}\n";
 
-static const char *cuda_kernel_names[12] = {
+static const char *cuda_kernel_names[20] = {
     "tadd_f32", "tmul_f32", "tadd_f64", "tmul_f64",
     "tadd_i32", "tmul_i32", "tadd_i64", "tmul_i64",
-    "tmm_f32", "tmm_f64", "tmm_i32", "tmm_i64"
+    "tmm_f32", "tmm_f64", "tmm_i32", "tmm_i64",
+    "tsub_f32", "tsub_f64", "tsub_i32", "tsub_i64",
+    "tdiv_f32", "tdiv_f64", "tdiv_i32", "tdiv_i64"
 };
 
 // --- Backend state (single device, process lifetime) ---
@@ -561,7 +779,7 @@ static int cuda_state = 0; // 0 = unprobed, 1 = ready, -1 = unavailable
 static int cuda_device_count = 0;
 static CUcontext cuda_ctx = 0;
 static CUmodule cuda_mod = 0;
-static void *cuda_fns[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+static void *cuda_fns[20] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static char cuda_error[2048] = {0};
 static char cuda_name[256] = {0};
 
@@ -672,7 +890,7 @@ static void cuda_init(void) {
         cuda_fail("PTX module load failed (driver too old for PTX 6.0?)");
         return;
     }
-    for (ki = 0; ki < 12; ++ki) {
+    for (ki = 0; ki < 20; ++ki) {
         if (p_cuModuleGetFunction((CUfunction *)&cuda_fns[ki], cuda_mod, cuda_kernel_names[ki]) != CUDA_SUCCESS) {
             cuda_fns[ki] = 0;
         }
@@ -685,12 +903,14 @@ static void cuda_init(void) {
 // Kernel table index by (op, dtype): op 0 = add, 1 = mul, 2 = matmul;
 // dtype 0 = f64, 1 = f32, 2 = i32, 3 = i64 (all covered on CUDA).
 static int cuda_kernel_index(int op, int dtype) {
-    static const int table[3][4] = {
+    static const int table[5][4] = {
         {2, 0, 4, 6},
         {3, 1, 5, 7},
+        {13, 12, 14, 15},
+        {17, 16, 18, 19},
         {9, 8, 10, 11}
     };
-    if (op < 0 || op > 2 || dtype < 0 || dtype > 3) return -1;
+    if (op < 0 || op > 4 || dtype < 0 || dtype > 3) return -1;
     return table[op][dtype];
 }
 
@@ -797,6 +1017,14 @@ int32_t alya_tensor_cuda_mul(void *ah, void *bh, void *oh, int32_t count, int32_
     return cuda_launch_ew(ah, bh, oh, count, 1, dtype);
 }
 
+int32_t alya_tensor_cuda_sub(void *ah, void *bh, void *oh, int32_t count, int32_t dtype) {
+    return cuda_launch_ew(ah, bh, oh, count, 2, dtype);
+}
+
+int32_t alya_tensor_cuda_div(void *ah, void *bh, void *oh, int32_t count, int32_t dtype) {
+    return cuda_launch_ew(ah, bh, oh, count, 3, dtype);
+}
+
 int32_t alya_tensor_cuda_matmul(void *ah, void *bh, void *oh, int32_t a_off, int32_t b_off, int32_t r_off,
                                 int32_t m, int32_t n, int32_t k, int32_t dtype) {
     int ki = 0;
@@ -814,7 +1042,7 @@ int32_t alya_tensor_cuda_matmul(void *ah, void *bh, void *oh, int32_t a_off, int
     unsigned int gy = 0;
     cuda_init();
     if (cuda_state != 1 || !ah || !bh || !oh || m <= 0 || n <= 0 || k <= 0) return 0;
-    ki = cuda_kernel_index(2, (int)dtype);
+    ki = cuda_kernel_index(4, (int)dtype);
     if (ki < 0 || !cuda_fns[ki]) return 0;
     da = (CUdeviceptr)(uintptr_t)ah;
     db = (CUdeviceptr)(uintptr_t)bh;
