@@ -10,7 +10,49 @@ import "std/math"
 import "std/str"
 import "./types.alya"
 import "./core/formatter.alya"
+@cfg(feature = "gpu")
 import "./core/device.alya"
+
+# ═══════════════════════════════════════════════════════════════
+# Slim-view GPU stubs (`gpu` feature off): every query reports "no
+# backend" and every offload declines, so all ops take their CPU
+# kernels. GPU placement tags still work (tagging only).
+# ═══════════════════════════════════════════════════════════════
+
+## Slim-view stub for `device_has_accelerator` (always false: no backend).
+@cfg(not(feature = "gpu"))
+pub function device_has_accelerator() -> bool
+    return false
+end
+
+## Slim-view stub for `device_last_error` (always empty: no backend).
+@cfg(not(feature = "gpu"))
+pub function device_last_error() -> string
+    return ""
+end
+
+## Slim-view stub for `device_name` (always empty: no backend).
+@cfg(not(feature = "gpu"))
+pub function device_name() -> string
+    return ""
+end
+
+## Slim-view stub for `synchronize` (no-op: no backend).
+@cfg(not(feature = "gpu"))
+pub function synchronize()
+end
+
+## Slim-view stub for `device_offload_ew` (always declines to CPU).
+@cfg(not(feature = "gpu"))
+pub function device_offload_ew(a: Tensor, b: Tensor, res: Tensor, count: int, op: int) -> bool
+    return false
+end
+
+## Slim-view stub for `device_offload_matmul` (always declines to CPU).
+@cfg(not(feature = "gpu"))
+pub function device_offload_matmul(a: Tensor, b: Tensor, res: Tensor, a_base: int, b_base: int, r_base: int, m: int, n: int, k: int) -> bool
+    return false
+end
 
 ## Device placement tags mirroring `TensorDevice` (`0` = CPU, `1` = SIMD,
 ## `2` = GPU). Stored per tensor; Phase 0 computes on CPU/SIMD regardless
@@ -955,6 +997,7 @@ end
 ## Placement alone (`device_id == 2`) is tagging; execution additionally
 ## needs a registered native backend (`device_has_accelerator`). Phase 0
 ## always returns `false` for GPU tensors — the honest fallback signal.
+## Without the `gpu` feature (default-on) this is always `false`.
 ##
 ## ### Parameters
 ## - `self`: The target `Tensor` instance.
@@ -965,7 +1008,10 @@ pub function Tensor.is_accelerated(self: Tensor) -> bool
     if self.device_id != 2
         return false
     end
+    @cfg(feature = "gpu")
     return device_has_accelerator()
+    @cfg(not(feature = "gpu"))
+    return false
 end
 
 ## Direct flat element access (integer storage converts to float;

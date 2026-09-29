@@ -75,6 +75,25 @@ alya add tensor --git https://github.com/alya-lang/tensor --branch main
 alya install
 ```
 
+### Package Features
+
+| Feature | Default | Description |
+|:---|:---:|:---|
+| `gpu` | ✅ | GPU offload (CUDA/Metal/OpenCL via `Lib/toolchain` C backends). Without it all ops take CPU kernels; placement tags and the query API keep working with honest "no backend" answers. |
+
+> [!NOTE]
+> The bundled C objects (`c/`) always compile regardless of features; the feature gates the Alya API surface and codegen. Slim builds still link the native library.
+
+```bash
+# Full build (default)
+alya install
+alya test
+
+# Slim CPU-only build
+alya install --no-default-features
+alya test --no-default-features
+```
+
 ---
 
 ## 🚀 Quick Start
