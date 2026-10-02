@@ -4,6 +4,16 @@
 
 import "std/mem"
 
+@cfg(arch = "x86")
+extern "C"
+    function alya_tensor_read_f64(ptr: ptr, offset: int) -> float
+end
+
+@cfg(not(arch = "x86"))
+function alya_tensor_read_f64(data: ptr, offset: int) -> float
+    return read_float(data, offset)
+end
+
 ## Formats a 1D tensor row into a string representation.
 ##
 ## ### Parameters
@@ -18,7 +28,7 @@ pub function format_vector(data_ptr: ptr, count: int, dtype: int) -> string
             is 1 => str(read_f32(data_ptr, i * 4))
             is 2 => str(read_i32(data_ptr, i * 4))
             is 3 => str(read_int(data_ptr, i * 8))
-            else => str(read_float(data_ptr, i * 8))
+            else => str(alya_tensor_read_f64(data_ptr, i * 8))
         end
         res += val_str
         if i + 1 < count
@@ -59,7 +69,7 @@ pub function format_matrix(data_ptr: ptr, rows: int, cols: int, dtype: int) -> s
                 is 1 => str(read_f32(data_ptr, off))
                 is 2 => str(read_i32(data_ptr, off))
                 is 3 => str(read_int(data_ptr, off))
-                else => str(read_float(data_ptr, off))
+                else => str(alya_tensor_read_f64(data_ptr, off))
             end
             res += val_str
             if j + 1 < cols

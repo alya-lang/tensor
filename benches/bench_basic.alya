@@ -226,7 +226,7 @@ function main()
     # 17. Text serialization round-trip [32, 32]
     let w1 = tensor::Tensor.ones([32, 32])
     let wpath = "./target_bench_save.alya-tensor"
-    let n_io = 200
+    let n_io = 10
     bench_start(runner, n_io)
     let io_idx = 0
     while io_idx < n_io

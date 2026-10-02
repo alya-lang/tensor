@@ -13,6 +13,52 @@ import "./core/formatter.alya"
 @cfg(feature = "gpu")
 import "./core/device.alya"
 
+@cfg(arch = "x86")
+extern "C"
+    function alya_tensor_read_f64(ptr: ptr, offset: int) -> float
+    function alya_tensor_write_f64(ptr: ptr, offset: int, v: float)
+    function alya_tensor_sqrt(x: float) -> float
+    function alya_tensor_exp(x: float) -> float
+    function alya_tensor_log(x: float) -> float
+    function alya_tensor_cos(x: float) -> float
+    function alya_tensor_sin(x: float) -> float
+end
+
+@cfg(not(arch = "x86"))
+function alya_tensor_read_f64(data: ptr, offset: int) -> float
+    return read_float(data, offset)
+end
+
+@cfg(not(arch = "x86"))
+function alya_tensor_write_f64(data: ptr, offset: int, val: float)
+    write_float(data, offset, val)
+end
+
+@cfg(not(arch = "x86"))
+function alya_tensor_sqrt(x: float) -> float
+    return native_sqrt(x)
+end
+
+@cfg(not(arch = "x86"))
+function alya_tensor_exp(x: float) -> float
+    return native_exp(x)
+end
+
+@cfg(not(arch = "x86"))
+function alya_tensor_log(x: float) -> float
+    return native_log(x)
+end
+
+@cfg(not(arch = "x86"))
+function alya_tensor_cos(x: float) -> float
+    return native_cos(x)
+end
+
+@cfg(not(arch = "x86"))
+function alya_tensor_sin(x: float) -> float
+    return native_sin(x)
+end
+
 # ═══════════════════════════════════════════════════════════════
 # Slim-view GPU stubs (`gpu` feature off): every query reports "no
 # backend" and every offload declines, so all ops take their CPU
@@ -172,7 +218,7 @@ function tensor_read_float(data: ptr, idx: int, dtype: int) -> float
         is 1 then return read_f32(data, idx * 4)
         is 2 then return read_i32(data, idx * 4) + 0.0
         is 3 then return read_int(data, idx * 8) + 0.0
-        else return read_float(data, idx * 8)
+        else return alya_tensor_read_f64(data, idx * 8)
     end
 end
 
@@ -186,7 +232,7 @@ function tensor_write_val(data: ptr, idx: int, dtype: int, val: float)
         is 1 then write_f32(data, idx * 4, val)
         is 2 then write_i32(data, idx * 4, int(val))
         is 3 then write_int(data, idx * 8, int(val))
-        else write_float(data, idx * 8, val)
+        else alya_tensor_write_f64(data, idx * 8, val)
     end
 end
 
@@ -666,10 +712,10 @@ pub function Tensor.randn(shape, dtype: int = 0) -> Tensor
             u1 = 0.0000000001
         end
         let u2: float = rand_float()
-        let mag: float = native_sqrt(-2.0 * native_log(u1))
+        let mag: float = alya_tensor_sqrt(-2.0 * alya_tensor_log(u1))
         let ang: float = 6.283185307179586 * u2
-        t.set_flat(i, mag * native_cos(ang))
-        t.set_flat(i + 1, mag * native_sin(ang))
+        t.set_flat(i, mag * alya_tensor_cos(ang))
+        t.set_flat(i + 1, mag * alya_tensor_sin(ang))
         i += 2
     end
     if i < total
@@ -678,7 +724,7 @@ pub function Tensor.randn(shape, dtype: int = 0) -> Tensor
             u1b = 0.0000000001
         end
         let u2b: float = rand_float()
-        t.set_flat(i, native_sqrt(-2.0 * native_log(u1b)) * native_cos(6.283185307179586 * u2b))
+        t.set_flat(i, alya_tensor_sqrt(-2.0 * alya_tensor_log(u1b)) * alya_tensor_cos(6.283185307179586 * u2b))
     end
     return t
 end
@@ -1944,13 +1990,13 @@ pub function Tensor.sqrt(self: Tensor) -> Tensor
     let total: int = self.size
     let i: int = 0
     while i < total
-        res.set_flat(i, native_sqrt(self.get_flat(i)))
+        res.set_flat(i, alya_tensor_sqrt(self.get_flat(i)))
         i += 1
     end
     return res
 end
 
-## Element-wise natural exponential (direct `native_exp`; see `sqrt` note).
+## Element-wise natural exponential.
 ##
 ## Integer storage converts through float and truncates on store.
 pub function Tensor.exp(self: Tensor) -> Tensor
@@ -1958,13 +2004,13 @@ pub function Tensor.exp(self: Tensor) -> Tensor
     let total: int = self.size
     let i: int = 0
     while i < total
-        res.set_flat(i, native_exp(self.get_flat(i)))
+        res.set_flat(i, alya_tensor_exp(self.get_flat(i)))
         i += 1
     end
     return res
 end
 
-## Element-wise natural logarithm (direct `native_log`; see `sqrt` note).
+## Element-wise natural logarithm.
 ##
 ## Named `ln` (not `log`) so the method stem never collides with the
 ## `log_n`/`log2`/`log10` stdlib wrappers in a compiled unit. Integer
@@ -1975,7 +2021,7 @@ pub function Tensor.ln(self: Tensor) -> Tensor
     let total: int = self.size
     let i: int = 0
     while i < total
-        res.set_flat(i, native_log(self.get_flat(i)))
+        res.set_flat(i, alya_tensor_log(self.get_flat(i)))
         i += 1
     end
     return res
@@ -2033,7 +2079,7 @@ function pow_float(base: float, exponent: float) -> float
         end
         return 0.0
     end
-    return native_exp(exponent * native_log(base))
+    return alya_tensor_exp(exponent * alya_tensor_log(base))
 end
 
 ## Element-wise clamp into `[lo, hi]` (exact per dtype).
@@ -2233,7 +2279,7 @@ end
 
 ## Computes the population standard deviation (`sqrt` of `variance`).
 pub function Tensor.std(self: Tensor) -> float
-    return native_sqrt(self.variance())
+    return alya_tensor_sqrt(self.variance())
 end
 
 ## Returns the flat index of the minimum element (first occurrence wins).
@@ -3314,7 +3360,11 @@ pub function Tensor.save(self: Tensor, path: string) -> int
     out += "data\n"
     let i: int = 0
     while i < self.size
-        out += str(tensor_read_bits(self.data, i, self.dtype)) + "\n"
+        if self.dtype == 0
+            out += str(self.get_flat(i)) + "\n"
+        else
+            out += str(tensor_read_bits(self.data, i, self.dtype)) + "\n"
+        end
         i += 1
     end
     return write_file(path, out)
@@ -3358,7 +3408,11 @@ pub function Tensor.load(path: string) -> Tensor
             if got >= t.size
                 throw "Tensor.load found more elements than the header shape holds"
             end
-            tensor_write_bits(t.data, got, dtype, int(rows[r]))
+            if dtype == 0
+                t.set_flat(got, float(rows[r]))
+            else
+                tensor_write_bits(t.data, got, dtype, int(rows[r]))
+            end
             got += 1
         end
         r += 1
