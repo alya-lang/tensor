@@ -165,15 +165,11 @@ pub function device_offload_ew(a: Tensor, b: Tensor, res: Tensor, count: int, op
         alya_tensor_device_free(ho)
         return false
     end
-    let launched: int = 0
-    if op == 1
-        launched = alya_tensor_device_mul(ha, hb, ho, count, a.dtype)
-    elif op == 2
-        launched = alya_tensor_device_sub(ha, hb, ho, count, a.dtype)
-    elif op == 3
-        launched = alya_tensor_device_div(ha, hb, ho, count, a.dtype)
-    else
-        launched = alya_tensor_device_add(ha, hb, ho, count, a.dtype)
+    let launched: int = when op
+        is 1 => alya_tensor_device_mul(ha, hb, ho, count, a.dtype)
+        is 2 => alya_tensor_device_sub(ha, hb, ho, count, a.dtype)
+        is 3 => alya_tensor_device_div(ha, hb, ho, count, a.dtype)
+        else => alya_tensor_device_add(ha, hb, ho, count, a.dtype)
     end
     if launched == 0
         alya_tensor_device_free(ha)
