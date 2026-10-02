@@ -369,21 +369,3 @@ int32_t alya_tensor_device_sync(void) {
 #endif
     return alya_tensor_ocl_sync();
 }
-
-// 64-bit float memory helpers for architectures with 32-bit words (e.g. x86).
-// In Alya x86, int parameters passed to extern "C" functions are pushed as 8-byte integers.
-double alya_tensor_read_f64(const void *ptr, int64_t offset) {
-    double v;
-    memcpy(&v, (const char *)ptr + (size_t)offset, sizeof(double));
-    return v;
-}
-
-void alya_tensor_write_f64(void *ptr, int64_t offset, double v) {
-    memcpy((char *)ptr + (size_t)offset, &v, sizeof(double));
-}
-
-double alya_tensor_sqrt(double x) { return sqrt(x); }
-double alya_tensor_exp(double x) { return exp(x); }
-double alya_tensor_log(double x) { return log(x); }
-double alya_tensor_cos(double x) { return cos(x); }
-double alya_tensor_sin(double x) { return sin(x); }

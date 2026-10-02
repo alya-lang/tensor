@@ -13,48 +13,30 @@ import "./core/formatter.alya"
 @cfg(feature = "gpu")
 import "./core/device.alya"
 
-@cfg(arch = "x86")
-extern "C"
-    function alya_tensor_read_f64(ptr: ptr, offset: int) -> float
-    function alya_tensor_write_f64(ptr: ptr, offset: int, v: float)
-    function alya_tensor_sqrt(x: float) -> float
-    function alya_tensor_exp(x: float) -> float
-    function alya_tensor_log(x: float) -> float
-    function alya_tensor_cos(x: float) -> float
-    function alya_tensor_sin(x: float) -> float
-end
-
-@cfg(not(arch = "x86"))
 function alya_tensor_read_f64(data: ptr, offset: int) -> float
     return read_float(data, offset)
 end
 
-@cfg(not(arch = "x86"))
 function alya_tensor_write_f64(data: ptr, offset: int, val: float)
     write_float(data, offset, val)
 end
 
-@cfg(not(arch = "x86"))
 function alya_tensor_sqrt(x: float) -> float
     return native_sqrt(x)
 end
 
-@cfg(not(arch = "x86"))
 function alya_tensor_exp(x: float) -> float
     return native_exp(x)
 end
 
-@cfg(not(arch = "x86"))
 function alya_tensor_log(x: float) -> float
     return native_log(x)
 end
 
-@cfg(not(arch = "x86"))
 function alya_tensor_cos(x: float) -> float
     return native_cos(x)
 end
 
-@cfg(not(arch = "x86"))
 function alya_tensor_sin(x: float) -> float
     return native_sin(x)
 end

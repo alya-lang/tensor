@@ -4,12 +4,6 @@
 
 import "std/mem"
 
-@cfg(arch = "x86")
-extern "C"
-    function alya_tensor_read_f64(ptr: ptr, offset: int) -> float
-end
-
-@cfg(not(arch = "x86"))
 function alya_tensor_read_f64(data: ptr, offset: int) -> float
     return read_float(data, offset)
 end
