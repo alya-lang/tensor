@@ -4,7 +4,7 @@
 import "std/test"
 import "../src/lib.alya" as tensor
 
-function assert_flt(r: TestRunner, actual: float, expected: float, msg: string, eps: float = 0.001) -> int
+function assert_flt(r: TestRunner, actual: float, expected: float, msg: string, eps: float = 0.001) -> bool
     r.total += 1
     let diff: float = actual - expected
     if diff < 0.0
