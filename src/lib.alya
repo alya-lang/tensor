@@ -154,7 +154,7 @@ pub function compute_size(shape: array) -> int
     let total: int = 1
     for dim in shape
         let d: int = dim
-        total = total * d
+        total *= d
     end
     return total
 end
@@ -379,7 +379,7 @@ function tensor_is_contiguous_shape(shape: array, strides: array) -> bool
             if st != expect
                 return false
             end
-            expect = expect * dim
+            expect *= dim
         end
         d -= 1
     end
@@ -2044,7 +2044,7 @@ function int_pow(base, count: int)
             r *= b
         end
         b *= b
-        e = e / 2
+        e /= 2
     end
     return r
 end
@@ -3127,7 +3127,7 @@ pub function Tensor.roll(self: Tensor, shift: int, dim: int) -> Tensor
             let coord: int = rem % dd
             rem = (rem - coord) / dd
             if d == dim
-                coord = coord - norm
+                coord -= norm
                 if coord < 0
                     coord += extent
                 end

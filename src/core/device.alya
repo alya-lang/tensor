@@ -99,7 +99,7 @@ function contiguous_shape(shape: array, strides: array) -> bool
             if st != expect
                 return false
             end
-            expect = expect * dim
+            expect *= dim
         end
         d -= 1
     end
