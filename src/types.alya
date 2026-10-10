@@ -60,5 +60,5 @@ pub function TensorConfig.summary(self: TensorConfig) -> string
         is 1 => "SIMD (AVX2/Neon/SSE2)"
         else => "CPU"
     end
-    return "TensorConfig(device: {dev_name}, threads: {self.threads})"
+    return f"TensorConfig(device: {dev_name}, threads: {self.threads})"
 end

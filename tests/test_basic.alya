@@ -12,11 +12,11 @@ function assert_flt(r: TestRunner, actual: float, expected: float, msg: string, 
     end
     if diff <= eps
         r.passed += 1
-        say "  [PASS] {msg}"
+        say f"  [PASS] {msg}"
         return true
     else
         r.failed += 1
-        say "  [FAIL] {msg} (expected: {expected}, got: {actual})"
+        say f"  [FAIL] {msg} (expected: {expected}, got: {actual})"
         return false
     end
 end
